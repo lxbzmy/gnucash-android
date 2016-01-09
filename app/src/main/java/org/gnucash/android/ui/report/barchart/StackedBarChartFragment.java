@@ -64,7 +64,7 @@ import static org.gnucash.android.ui.report.ReportsActivity.COLORS;
  * @author Oleksandr Tyshkovets <olexandr.tyshkovets@gmail.com>
  * @author Ngewi Fet <ngewif@gmail.com>
  */
-public class BarChartFragment extends BaseReportFragment {
+public class StackedBarChartFragment extends BaseReportFragment {
 
     private static final String X_AXIS_MONTH_PATTERN = "MMM YY";
     private static final String X_AXIS_QUARTER_PATTERN = "Q%d %s";
@@ -82,13 +82,8 @@ public class BarChartFragment extends BaseReportFragment {
     private boolean mChartDataPresent = true;
 
     @Override
-    public int getTitleColor() {
-        return R.color.account_red;
-    }
-
-    @Override
     public int getTitle() {
-        return R.string.title_bar_chart;
+        return R.string.title_cash_flow_report;
     }
 
     @Override
@@ -121,7 +116,6 @@ public class BarChartFragment extends BaseReportFragment {
         chartLegend.setPosition(Legend.LegendPosition.BELOW_CHART_CENTER);
         chartLegend.setWordWrapEnabled(true);
 
-        refresh();
     }
 
 
@@ -252,10 +246,10 @@ public class BarChartFragment extends BaseReportFragment {
         TransactionsDbAdapter adapter = TransactionsDbAdapter.getInstance();
         String code = mCurrency.getCurrencyCode();
         LocalDate startDate;
-        if (mReportStartTime == -1) {
+        if (mReportPeriodStart == -1) {
             startDate = new LocalDate(adapter.getTimestampOfEarliestTransaction(accountType, code));
         } else {
-            startDate = new LocalDate(mReportStartTime);
+            startDate = new LocalDate(mReportPeriodStart);
         }
         startDate = startDate.withDayOfMonth(1);
         Log.d(TAG, accountType + " X-axis star date: " + startDate.toString("dd MM yyyy"));
@@ -271,10 +265,10 @@ public class BarChartFragment extends BaseReportFragment {
         TransactionsDbAdapter adapter = TransactionsDbAdapter.getInstance();
         String code = mCurrency.getCurrencyCode();
         LocalDate endDate;
-        if (mReportEndTime == -1) {
+        if (mReportPeriodEnd == -1) {
             endDate = new LocalDate(adapter.getTimestampOfLatestTransaction(accountType, code));
         } else {
-            endDate = new LocalDate(mReportEndTime);
+            endDate = new LocalDate(mReportPeriodEnd);
         }
         endDate = endDate.withDayOfMonth(1);
         Log.d(TAG, accountType + " X-axis end date: " + endDate.toString("dd MM yyyy"));

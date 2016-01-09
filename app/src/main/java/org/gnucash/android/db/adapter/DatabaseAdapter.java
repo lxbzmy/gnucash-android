@@ -21,6 +21,7 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteStatement;
 import android.support.annotation.NonNull;
+import android.text.TextUtils;
 import android.util.Log;
 
 import org.gnucash.android.db.DatabaseSchema;
@@ -55,15 +56,26 @@ public abstract class DatabaseAdapter<Model extends BaseModel> {
 
     protected final String mTableName;
 
-    protected SQLiteStatement mReplaceStatement;
+    protected final String[] mColumns;
+
+    protected volatile SQLiteStatement mReplaceStatement;
+
+    protected volatile SQLiteStatement mUpdateStatement;
+
+    protected volatile SQLiteStatement mInsertStatement;
+
+    public enum UpdateMethod {
+        insert, update, replace
+    };
 
     /**
      * Opens the database adapter with an existing database
      * @param db SQLiteDatabase object
      */
-    public DatabaseAdapter(SQLiteDatabase db, @NonNull String tableName) {
+    public DatabaseAdapter(SQLiteDatabase db, @NonNull String tableName, @NonNull String[] columns) {
         this.mTableName = tableName;
         this.mDb = db;
+        this.mColumns = columns;
         if (!db.isOpen() || db.isReadOnly())
             throw new IllegalArgumentException("Database not open or is read-only. Require writeable database");
 
@@ -195,8 +207,66 @@ public abstract class DatabaseAdapter<Model extends BaseModel> {
      * @param model Model to be saved to the database
      */
     public void addRecord(@NonNull final Model model){
+        addRecord(model, UpdateMethod.replace);
+    }
+
+    /**
+     * Add a model record to the database.
+     * <p>If unsure about which {@code updateMethod} to use, use {@link UpdateMethod#replace}</p>
+     * @param model Subclass of {@link BaseModel} to be added
+     * @param updateMethod Method to use for adding the record
+     */
+    public void addRecord(@NonNull final Model model, UpdateMethod updateMethod){
         Log.d(LOG_TAG, String.format("Adding %s record to database: ", model.getClass().getSimpleName()));
-        compileReplaceStatement(model).execute();
+        switch(updateMethod){
+            case insert:
+                synchronized(getInsertStatement()) {
+                    setBindings(getInsertStatement(), model).execute();
+                }
+                break;
+            case update:
+                synchronized(getUpdateStatement()) {
+                    setBindings(getUpdateStatement(), model).execute();
+                }
+                break;
+            default:
+                synchronized(getReplaceStatement()) {
+                    setBindings(getReplaceStatement(), model).execute();
+                }
+                break;
+        }
+    }
+
+    /// This function should be called in a db transaction
+    private long doAddModels(@NonNull final List<Model> modelList, UpdateMethod updateMethod) {
+        long nRow = 0;
+        switch (updateMethod) {
+            case update:
+                synchronized(getUpdateStatement()) {
+                    for (Model model : modelList) {
+                        setBindings(getUpdateStatement(), model).execute();
+                        nRow++;
+                    }
+                }
+                break;
+            case insert:
+                synchronized(getInsertStatement()) {
+                    for (Model model : modelList) {
+                        setBindings(getInsertStatement(), model).execute();
+                        nRow++;
+                    }
+                }
+                break;
+            default:
+                synchronized(getReplaceStatement()) {
+                    for (Model model : modelList) {
+                        setBindings(getReplaceStatement(), model).execute();
+                        nRow++;
+                    }
+                }
+                break;
+        }
+        return nRow;
     }
 
     /**
@@ -205,7 +275,11 @@ public abstract class DatabaseAdapter<Model extends BaseModel> {
      * @param modelList List of model records
      * @return Number of rows inserted
      */
-    public long bulkAddRecords(@NonNull List<Model> modelList) {
+    public long bulkAddRecords(@NonNull List<Model> modelList){
+        return bulkAddRecords(modelList, UpdateMethod.replace);
+    }
+
+    public long bulkAddRecords(@NonNull List<Model> modelList, UpdateMethod updateMethod) {
         if (modelList.isEmpty()) {
             Log.d(LOG_TAG, "Empty model list. Cannot bulk add records, returning 0");
             return 0;
@@ -216,10 +290,7 @@ public abstract class DatabaseAdapter<Model extends BaseModel> {
         long nRow = 0;
         try {
             mDb.beginTransaction();
-            for (Model model : modelList) {
-                compileReplaceStatement(model).execute();
-                nRow++;
-            }
+            nRow = doAddModels(modelList, updateMethod);
             mDb.setTransactionSuccessful();
         }
         finally {
@@ -242,10 +313,70 @@ public abstract class DatabaseAdapter<Model extends BaseModel> {
      * This statement can be executed to replace a record in the database.
      * <p>If the {@link #mReplaceStatement} is null, subclasses should create a new statement and return.<br/>
      * If it is not null, the previous bindings will be cleared and replaced with those from the model</p>
-     * @param model Model whose attributes will be used as bindings
      * @return SQLiteStatement for replacing a record in the database
      */
-    protected abstract SQLiteStatement compileReplaceStatement(@NonNull final Model model);
+    protected final @NonNull SQLiteStatement getReplaceStatement() {
+        SQLiteStatement stmt = mReplaceStatement;
+        if (stmt == null) {
+            synchronized (this) {
+                stmt = mReplaceStatement;
+                if (stmt == null) {
+                    mReplaceStatement = stmt
+                            = mDb.compileStatement("REPLACE INTO " + mTableName + " ( "
+                            + TextUtils.join(" , ", mColumns) + " , "
+                            + TransactionEntry.COLUMN_UID
+                            + " ) VALUES ( "
+                            + (new String(new char[mColumns.length]).replace("\0", "? , "))
+                            + "?)");
+                }
+            }
+        }
+        return stmt;
+    }
+
+    protected final @NonNull SQLiteStatement getUpdateStatement() {
+        SQLiteStatement stmt = mUpdateStatement;
+        if (stmt == null) {
+            synchronized (this) {
+                stmt = mUpdateStatement;
+                if (stmt == null) {
+                    mUpdateStatement = stmt
+                            = mDb.compileStatement("UPDATE " + mTableName + " SET "
+                            + TextUtils.join(" = ? , ", mColumns) + " = ? WHERE "
+                            + TransactionEntry.COLUMN_UID
+                            + " = ?");
+                }
+            }
+        }
+        return stmt;
+    }
+
+    protected final @NonNull SQLiteStatement getInsertStatement() {
+        SQLiteStatement stmt = mInsertStatement;
+        if (stmt == null) {
+            synchronized (this) {
+                stmt = mInsertStatement;
+                if (stmt == null) {
+                    mInsertStatement = stmt
+                            = mDb.compileStatement("INSERT INTO " + mTableName + " ( "
+                            + TextUtils.join(" , ", mColumns) + " , "
+                            + TransactionEntry.COLUMN_UID
+                            + " ) VALUES ( "
+                            + (new String(new char[mColumns.length]).replace("\0", "? , "))
+                            + "?)");
+                }
+            }
+        }
+        return stmt;
+    }
+
+    /**
+     * Binds the values from the model the the SQL statement
+     * @param stmt SQL statement with placeholders
+     * @param model Model from which to read bind attributes
+     * @return SQL statement ready for execution
+     */
+    protected abstract @NonNull SQLiteStatement setBindings(@NonNull SQLiteStatement stmt, @NonNull final Model model);
 
     /**
      * Returns a model instance populated with data from the record with GUID {@code uid}
@@ -403,7 +534,7 @@ public abstract class DatabaseAdapter<Model extends BaseModel> {
             if (cursor.moveToFirst()) {
                 result = cursor.getLong(cursor.getColumnIndexOrThrow(DatabaseSchema.CommonColumns._ID));
             } else {
-                throw new IllegalArgumentException("GUID " + uid + " does not exist in the db");
+                throw new IllegalArgumentException(mTableName + " with GUID " + uid + " does not exist in the db");
             }
         } finally {
             cursor.close();
@@ -428,7 +559,7 @@ public abstract class DatabaseAdapter<Model extends BaseModel> {
             if (cursor.moveToFirst()) {
                 uid = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseSchema.CommonColumns.COLUMN_UID));
             } else {
-                throw new IllegalArgumentException("Record with ID " + id + " does not exist in the db");
+                throw new IllegalArgumentException(mTableName + " Record ID " + id + " does not exist in the db");
             }
         } finally {
             cursor.close();
@@ -623,6 +754,20 @@ public abstract class DatabaseAdapter<Model extends BaseModel> {
      */
     public void setTransactionSuccessful() {
         mDb.setTransactionSuccessful();
+    }
+
+    /// Foreign key constraits should be enabled in general.
+    /// But if it affects speed (check constraints takes time)
+    /// and the constrained can be assured by the program,
+    /// or if some SQL exec will cause deletion of records
+    /// (like use replace in accounts update will delete all transactions)
+    /// that need not be deleted, then it can be disabled temporarily
+    public void enableForeignKey(boolean enable) {
+        if (enable){
+            mDb.execSQL("PRAGMA foreign_keys=ON;");
+        } else {
+            mDb.execSQL("PRAGMA foreign_keys=OFF;");
+        }
     }
 
     /**

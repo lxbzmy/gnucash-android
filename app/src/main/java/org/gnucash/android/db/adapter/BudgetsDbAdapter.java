@@ -47,10 +47,16 @@ public class BudgetsDbAdapter extends DatabaseAdapter<Budget>{
      *
      * @param db        SQLiteDatabase object
      */
-    public BudgetsDbAdapter(SQLiteDatabase db) {
-        super(db, BudgetEntry.TABLE_NAME);
-        mRecurrenceDbAdapter = new RecurrenceDbAdapter(db);
-        mBudgetAmountsDbAdapter = new BudgetAmountsDbAdapter(db);
+    public BudgetsDbAdapter(SQLiteDatabase db, BudgetAmountsDbAdapter budgetAmountsDbAdapter,
+                            RecurrenceDbAdapter recurrenceDbAdapter) {
+        super(db, BudgetEntry.TABLE_NAME, new String[]{
+                BudgetEntry.COLUMN_NAME,
+                BudgetEntry.COLUMN_DESCRIPTION,
+                BudgetEntry.COLUMN_RECURRENCE_UID,
+                BudgetEntry.COLUMN_NUM_PERIODS
+        });
+        mRecurrenceDbAdapter = recurrenceDbAdapter;
+        mBudgetAmountsDbAdapter = budgetAmountsDbAdapter;
     }
 
     /**
@@ -62,20 +68,20 @@ public class BudgetsDbAdapter extends DatabaseAdapter<Budget>{
     }
 
     @Override
-    public void addRecord(@NonNull Budget budget) {
+    public void addRecord(@NonNull Budget budget, UpdateMethod updateMethod) {
         if (budget.getBudgetAmounts().size() == 0)
             throw new IllegalArgumentException("Budgets must have budget amounts");
 
-        mRecurrenceDbAdapter.addRecord(budget.getRecurrence());
-        super.addRecord(budget);
+        mRecurrenceDbAdapter.addRecord(budget.getRecurrence(), updateMethod);
+        super.addRecord(budget, updateMethod);
         mBudgetAmountsDbAdapter.deleteBudgetAmountsForBudget(budget.getUID());
         for (BudgetAmount budgetAmount : budget.getBudgetAmounts()) {
-            mBudgetAmountsDbAdapter.addRecord(budgetAmount);
+            mBudgetAmountsDbAdapter.addRecord(budgetAmount, updateMethod);
         }
     }
 
     @Override
-    public long bulkAddRecords(@NonNull List<Budget> budgetList) {
+    public long bulkAddRecords(@NonNull List<Budget> budgetList, UpdateMethod updateMethod) {
         List<BudgetAmount> budgetAmountList = new ArrayList<>(budgetList.size()*2);
         for (Budget budget : budgetList) {
             budgetAmountList.addAll(budget.getBudgetAmounts());
@@ -86,14 +92,14 @@ public class BudgetsDbAdapter extends DatabaseAdapter<Budget>{
         for (Budget budget : budgetList) {
             recurrenceList.add(budget.getRecurrence());
         }
-        mRecurrenceDbAdapter.bulkAddRecords(recurrenceList);
+        mRecurrenceDbAdapter.bulkAddRecords(recurrenceList, updateMethod);
 
         //now add the budgets themselves
-        long nRow = super.bulkAddRecords(budgetList);
+        long nRow = super.bulkAddRecords(budgetList, updateMethod);
 
         //then add the budget amounts, they require the budgets to exist
         if (nRow > 0 && !budgetAmountList.isEmpty()){
-            mBudgetAmountsDbAdapter.bulkAddRecords(budgetAmountList);
+            mBudgetAmountsDbAdapter.bulkAddRecords(budgetAmountList, updateMethod);
         }
 
         return nRow;
@@ -118,25 +124,16 @@ public class BudgetsDbAdapter extends DatabaseAdapter<Budget>{
     }
 
     @Override
-    protected SQLiteStatement compileReplaceStatement(@NonNull Budget budget) {
-        if (mReplaceStatement == null){
-            mReplaceStatement = mDb.compileStatement("REPLACE INTO " + BudgetEntry.TABLE_NAME + " ( "
-                    + BudgetEntry.COLUMN_UID            + " , "
-                    + BudgetEntry.COLUMN_NAME           + " , "
-                    + BudgetEntry.COLUMN_DESCRIPTION    + " , "
-                    + BudgetEntry.COLUMN_RECURRENCE_UID + " , "
-                    + BudgetEntry.COLUMN_NUM_PERIODS    + " ) VALUES (? , ? , ? , ? , ? ) ");
-        }
-
-        mReplaceStatement.clearBindings();
-        mReplaceStatement.bindString(1, budget.getUID());
-        mReplaceStatement.bindString(2, budget.getName());
+    protected @NonNull SQLiteStatement setBindings(@NonNull SQLiteStatement stmt, @NonNull final Budget budget) {
+        stmt.clearBindings();
+        stmt.bindString(1, budget.getName());
         if (budget.getDescription() != null)
-            mReplaceStatement.bindString(3, budget.getDescription());
-        mReplaceStatement.bindString(4, budget.getRecurrence().getUID());
-        mReplaceStatement.bindLong(5, budget.getNumberOfPeriods());
+            stmt.bindString(2, budget.getDescription());
+        stmt.bindString(3, budget.getRecurrence().getUID());
+        stmt.bindLong(4, budget.getNumberOfPeriods());
+        stmt.bindString(5, budget.getUID());
 
-        return mReplaceStatement;
+        return stmt;
     }
 
     /**

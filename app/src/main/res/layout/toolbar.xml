@@ -21,19 +21,14 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content">
 
-    <ProgressBar android:id="@+id/progress_indicator"
-        android:layout_width="match_parent"
-        android:layout_height="5dp"
-        style="?android:attr/progressBarStyleHorizontal"
-        android:indeterminate="true"
-        android:visibility="visible"/>
+    <include layout="@layout/actionbar_progress_indicator" />
 
     <android.support.v7.widget.Toolbar
         android:id="@+id/toolbar"
         android:background="?attr/colorPrimary"
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
-        app:elevation="10dp"
+        app:elevation="@dimen/elevation_default"
         app:layout_scrollFlags="enterAlways"
         android:theme="@style/ThemeOverlay.AppCompat.Dark.ActionBar"
         app:popupTheme="@style/ThemeOverlay.AppCompat.Light"

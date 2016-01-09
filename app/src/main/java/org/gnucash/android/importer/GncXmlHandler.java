@@ -18,16 +18,23 @@
 package org.gnucash.android.importer;
 
 import android.database.sqlite.SQLiteDatabase;
+import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.util.Log;
 
 import com.crashlytics.android.Crashlytics;
 
 import org.gnucash.android.app.GnuCashApplication;
+import org.gnucash.android.db.BookDbHelper;
+import org.gnucash.android.db.DatabaseHelper;
 import org.gnucash.android.db.adapter.AccountsDbAdapter;
+import org.gnucash.android.db.adapter.BooksDbAdapter;
+import org.gnucash.android.db.adapter.BudgetAmountsDbAdapter;
 import org.gnucash.android.db.adapter.BudgetsDbAdapter;
 import org.gnucash.android.db.adapter.CommoditiesDbAdapter;
+import org.gnucash.android.db.adapter.DatabaseAdapter;
 import org.gnucash.android.db.adapter.PricesDbAdapter;
+import org.gnucash.android.db.adapter.RecurrenceDbAdapter;
 import org.gnucash.android.db.adapter.ScheduledActionDbAdapter;
 import org.gnucash.android.db.adapter.SplitsDbAdapter;
 import org.gnucash.android.db.adapter.TransactionsDbAdapter;
@@ -35,6 +42,7 @@ import org.gnucash.android.export.xml.GncXmlHelper;
 import org.gnucash.android.model.Account;
 import org.gnucash.android.model.AccountType;
 import org.gnucash.android.model.BaseModel;
+import org.gnucash.android.model.Book;
 import org.gnucash.android.model.Commodity;
 import org.gnucash.android.model.Budget;
 import org.gnucash.android.model.BudgetAmount;
@@ -254,39 +262,32 @@ public class GncXmlHandler extends DefaultHandler {
     private Map<String, Integer> mCurrencyCount;
 
     private BudgetsDbAdapter mBudgetsDbAdapter;
+    private Book mBook;
+    private SQLiteDatabase mainDb;
 
     /**
      * Creates a handler for handling XML stream events when parsing the XML backup file
      */
     public GncXmlHandler() {
-        init(null);
+        init();
     }
 
     /**
-     * Overloaded constructor.
-     * Useful when reading XML into an already open database connection e.g. during migration
-     * @param db SQLite database object
+     * Initialize the GnuCash XML handler
      */
-    public GncXmlHandler(SQLiteDatabase db) {
-        init(db);
-    }
+    private void init() {
+        mBook = new Book();
 
-    private void init(@Nullable SQLiteDatabase db) {
-        if (db == null) {
-            mAccountsDbAdapter = AccountsDbAdapter.getInstance();
-            mTransactionsDbAdapter = TransactionsDbAdapter.getInstance();
-            mScheduledActionsDbAdapter = ScheduledActionDbAdapter.getInstance();
-            mCommoditiesDbAdapter = CommoditiesDbAdapter.getInstance();
-            mPricesDbAdapter = PricesDbAdapter.getInstance();
-            mBudgetsDbAdapter = BudgetsDbAdapter.getInstance();
-        } else {
-            mTransactionsDbAdapter = new TransactionsDbAdapter(db, new SplitsDbAdapter(db));
-            mAccountsDbAdapter = new AccountsDbAdapter(db, mTransactionsDbAdapter);
-            mScheduledActionsDbAdapter = new ScheduledActionDbAdapter(db);
-            mCommoditiesDbAdapter = new CommoditiesDbAdapter(db);
-            mPricesDbAdapter = new PricesDbAdapter(db);
-            mBudgetsDbAdapter = new BudgetsDbAdapter(db);
-        }
+        DatabaseHelper databaseHelper = new DatabaseHelper(GnuCashApplication.getAppContext(), mBook.getUID());
+        mainDb = databaseHelper.getWritableDatabase();
+        mTransactionsDbAdapter = new TransactionsDbAdapter(mainDb, new SplitsDbAdapter(mainDb));
+        mAccountsDbAdapter = new AccountsDbAdapter(mainDb, mTransactionsDbAdapter);
+        RecurrenceDbAdapter recurrenceDbAdapter = new RecurrenceDbAdapter(mainDb);
+        mScheduledActionsDbAdapter = new ScheduledActionDbAdapter(mainDb, recurrenceDbAdapter);
+        mCommoditiesDbAdapter = new CommoditiesDbAdapter(mainDb);
+        mPricesDbAdapter = new PricesDbAdapter(mainDb);
+        mBudgetsDbAdapter = new BudgetsDbAdapter(mainDb, new BudgetAmountsDbAdapter(mainDb), recurrenceDbAdapter);
+
 
         mContent = new StringBuilder();
 
@@ -450,7 +451,7 @@ public class GncXmlHandler extends DefaultHandler {
                 mAccount.setParentUID(characterString);
                 break;
             case GncXmlHelper.TAG_ACCOUNT:
-                if (!mInTemplates) { //we ignore template accounts, we have no use for them
+                if (!mInTemplates) { //we ignore template accounts, we have no use for them. FIXME someday and import the templates too
                     mAccountList.add(mAccount);
                     mAccountMap.put(mAccount.getUID(), mAccount);
                     // check ROOT account
@@ -652,7 +653,7 @@ public class GncXmlHandler extends DefaultHandler {
                     //the split amount uses the account currency
                     mSplit.setQuantity(new Money(mQuantity, getCommodityForAccount(characterString)));
                     //the split value uses the transaction currency
-                    mSplit.setValue(new Money(mValue, Commodity.getInstance(mTransaction.getCurrency().getCurrencyCode())));
+                    mSplit.setValue(new Money(mValue, mCommoditiesDbAdapter.getCommodity(mTransaction.getCurrency().getCurrencyCode())));
                     mSplit.setAccountUID(characterString);
                 } else {
                     if (!mIgnoreTemplateTransaction)
@@ -879,7 +880,7 @@ public class GncXmlHandler extends DefaultHandler {
             String currencyCode = split.getAccountUID();
             Account imbAccount = mapImbalanceAccount.get(currencyCode);
             if (imbAccount == null) {
-                imbAccount = new Account(imbalancePrefix + currencyCode, Commodity.getInstance(currencyCode));
+                imbAccount = new Account(imbalancePrefix + currencyCode, mCommoditiesDbAdapter.getCommodity(currencyCode));
                 imbAccount.setParentUID(mRootAccount.getUID());
                 imbAccount.setAccountType(AccountType.BANK);
                 mapImbalanceAccount.put(currencyCode, imbAccount);
@@ -927,39 +928,6 @@ public class GncXmlHandler extends DefaultHandler {
         for (Account account:mAccountList){
             account.setFullName(mapFullName.get(account.getUID()));
         }
-        long startTime = System.nanoTime();
-        mAccountsDbAdapter.beginTransaction();
-        Log.d(getClass().getSimpleName(), "bulk insert starts");
-        try {
-            Log.d(getClass().getSimpleName(), "before clean up db");
-            mAccountsDbAdapter.deleteAllRecords();
-            Log.d(getClass().getSimpleName(), String.format("deb clean up done %d ns", System.nanoTime()-startTime));
-            long nAccounts = mAccountsDbAdapter.bulkAddRecords(mAccountList);
-            Log.d("Handler:", String.format("%d accounts inserted", nAccounts));
-            //We need to add scheduled actions first because there is a foreign key constraint on transactions
-            //which are generated from scheduled actions (we do auto-create some transactions during import)
-            long nSchedActions = mScheduledActionsDbAdapter.bulkAddRecords(mScheduledActionsList);
-            Log.d("Handler:", String.format("%d scheduled actions inserted", nSchedActions));
-
-            long nTempTransactions = mTransactionsDbAdapter.bulkAddRecords(mTemplateTransactions);
-            Log.d("Handler:", String.format("%d template transactions inserted", nTempTransactions));
-
-            long nTransactions = mTransactionsDbAdapter.bulkAddRecords(mTransactionList);
-            Log.d("Handler:", String.format("%d transactions inserted", nTransactions));
-
-            long nPrices = mPricesDbAdapter.bulkAddRecords(mPriceList);
-            Log.d(getClass().getSimpleName(), String.format("%d prices inserted", nPrices));
-
-            long nBudgets = mBudgetsDbAdapter.bulkAddRecords(mBudgetList);
-            Log.d(getClass().getSimpleName(), String.format("%d budgets inserted", nBudgets));
-
-            long endTime = System.nanoTime();
-            Log.d(getClass().getSimpleName(), String.format("bulk insert time: %d", endTime - startTime));
-
-            mAccountsDbAdapter.setTransactionSuccessful();
-        } finally {
-            mAccountsDbAdapter.endTransaction();
-        }
 
         String mostAppearedCurrency = "";
         int mostCurrencyAppearance = 0;
@@ -972,6 +940,67 @@ public class GncXmlHandler extends DefaultHandler {
         if (mostCurrencyAppearance > 0) {
             GnuCashApplication.setDefaultCurrencyCode(mostAppearedCurrency);
         }
+
+        saveToDatabase();
+    }
+
+    /**
+     * Saves the imported data to the database
+     * @return GUID of the newly created book, or null if not successful
+     */
+    private void saveToDatabase() {
+        BooksDbAdapter booksDbAdapter = BooksDbAdapter.getInstance();
+        mBook.setRootAccountUID(mRootAccount.getUID());
+        mBook.setDisplayName(booksDbAdapter.generateDefaultBookName());
+
+        long startTime = System.nanoTime();
+        mAccountsDbAdapter.beginTransaction();
+        Log.d(getClass().getSimpleName(), "bulk insert starts");
+        try {
+            // disable foreign key. The database structure should be ensured by the data inserted.
+            // it will make insertion much faster.
+            mAccountsDbAdapter.enableForeignKey(false);
+            Log.d(getClass().getSimpleName(), "before clean up db");
+            mAccountsDbAdapter.deleteAllRecords();
+            Log.d(getClass().getSimpleName(), String.format("deb clean up done %d ns", System.nanoTime()-startTime));
+            long nAccounts = mAccountsDbAdapter.bulkAddRecords(mAccountList, DatabaseAdapter.UpdateMethod.insert);
+            Log.d("Handler:", String.format("%d accounts inserted", nAccounts));
+            //We need to add scheduled actions first because there is a foreign key constraint on transactions
+            //which are generated from scheduled actions (we do auto-create some transactions during import)
+            long nSchedActions = mScheduledActionsDbAdapter.bulkAddRecords(mScheduledActionsList, DatabaseAdapter.UpdateMethod.insert);
+            Log.d("Handler:", String.format("%d scheduled actions inserted", nSchedActions));
+
+            long nTempTransactions = mTransactionsDbAdapter.bulkAddRecords(mTemplateTransactions, DatabaseAdapter.UpdateMethod.insert);
+            Log.d("Handler:", String.format("%d template transactions inserted", nTempTransactions));
+
+            long nTransactions = mTransactionsDbAdapter.bulkAddRecords(mTransactionList, DatabaseAdapter.UpdateMethod.insert);
+            Log.d("Handler:", String.format("%d transactions inserted", nTransactions));
+
+            long nPrices = mPricesDbAdapter.bulkAddRecords(mPriceList, DatabaseAdapter.UpdateMethod.insert);
+            Log.d(getClass().getSimpleName(), String.format("%d prices inserted", nPrices));
+
+            long nBudgets = mBudgetsDbAdapter.bulkAddRecords(mBudgetList, DatabaseAdapter.UpdateMethod.insert);
+            Log.d(getClass().getSimpleName(), String.format("%d budgets inserted", nBudgets));
+
+            long endTime = System.nanoTime();
+            Log.d(getClass().getSimpleName(), String.format("bulk insert time: %d", endTime - startTime));
+
+            //if all of the import went smoothly, then add the book to the book db
+            booksDbAdapter.addRecord(mBook, DatabaseAdapter.UpdateMethod.insert);
+            mAccountsDbAdapter.setTransactionSuccessful();
+        } finally {
+            mAccountsDbAdapter.enableForeignKey(true);
+            mAccountsDbAdapter.endTransaction();
+            mainDb.close(); //close it after import
+        }
+    }
+
+    /**
+     * Returns the unique identifier of the just-imported book
+     * @return GUID of the newly imported book
+     */
+    public @NonNull String getBookUID(){
+        return mBook.getUID();
     }
 
     /**

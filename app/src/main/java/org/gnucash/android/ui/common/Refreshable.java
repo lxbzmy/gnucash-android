@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Ngewi Fet <ngewif@gmail.com>
+ * Copyright (c) 2013 - 2014 Ngewi Fet <ngewif@gmail.com>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,19 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-package org.gnucash.android.ui.util;
-
-import org.gnucash.android.model.Money;
+package org.gnucash.android.ui.common;
 
 /**
- * Interface to be implemented by classes which start the transfer funds fragment
+ * Interface for fragments which are refreshable
+ * @author Ngewi Fet <ngewif@gmail.com>
  */
-public interface OnTransferFundsListener {
+public interface Refreshable {
 
     /**
-     * Method called after the funds have been converted to the desired currency
-     * @param amount Funds in new currency
+     * Refresh the list, typically be restarting the loader
      */
-    void transferComplete(Money amount);
+    public void refresh();
+
+    /**
+     * Refresh the list with modified parameters
+     * @param uid GUID of relevant item to be refreshed
+     */
+    public void refresh(String uid);
 }

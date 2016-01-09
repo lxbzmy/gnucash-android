@@ -81,9 +81,22 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
      * @param db SQliteDatabase instance
      */
     public AccountsDbAdapter(SQLiteDatabase db, TransactionsDbAdapter transactionsDbAdapter) {
-        super(db, AccountEntry.TABLE_NAME);
+        super(db, AccountEntry.TABLE_NAME, new String[]{
+                AccountEntry.COLUMN_NAME         ,
+                AccountEntry.COLUMN_DESCRIPTION  ,
+                AccountEntry.COLUMN_TYPE         ,
+                AccountEntry.COLUMN_CURRENCY     ,
+                AccountEntry.COLUMN_COLOR_CODE   ,
+                AccountEntry.COLUMN_FAVORITE     ,
+                AccountEntry.COLUMN_FULL_NAME    ,
+                AccountEntry.COLUMN_PLACEHOLDER  ,
+                AccountEntry.COLUMN_CREATED_AT   ,
+                AccountEntry.COLUMN_HIDDEN       ,
+                AccountEntry.COLUMN_COMMODITY_UID,
+                AccountEntry.COLUMN_PARENT_ACCOUNT_UID,
+                AccountEntry.COLUMN_DEFAULT_TRANSFER_ACCOUNT_UID
+        });
         mTransactionsAdapter = transactionsDbAdapter;
-        LOG_TAG = "AccountsDbAdapter";
     }
 
     /**
@@ -101,11 +114,11 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
 	 * @return Database row ID of the inserted account
 	 */
     @Override
-	public void addRecord(@NonNull Account account){
+	public void addRecord(@NonNull Account account, UpdateMethod updateMethod){
         Log.d(LOG_TAG, "Replace account to db");
         //in-case the account already existed, we want to update the templates based on it as well
         List<Transaction> templateTransactions = mTransactionsAdapter.getScheduledTransactionsForAccount(account.getUID());
-        super.addRecord(account);
+        super.addRecord(account, updateMethod);
         String accountUID = account.getUID();
 		//now add transactions if there are any
 		if (account.getAccountType() != AccountType.ROOT){
@@ -113,10 +126,10 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
             updateRecord(accountUID, AccountEntry.COLUMN_FULL_NAME, getFullyQualifiedAccountName(accountUID));
             for (Transaction t : account.getTransactions()) {
                 t.setCommodity(account.getCommodity());
-		        mTransactionsAdapter.addRecord(t);
+		        mTransactionsAdapter.addRecord(t, updateMethod);
 			}
             for (Transaction transaction : templateTransactions) {
-                mTransactionsAdapter.addRecord(transaction);
+                mTransactionsAdapter.addRecord(transaction, UpdateMethod.update);
             }
         }
 	}
@@ -131,7 +144,7 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
      * @return number of rows inserted
      */
     @Override
-    public long bulkAddRecords(@NonNull List<Account> accountList){
+    public long bulkAddRecords(@NonNull List<Account> accountList, UpdateMethod updateMethod){
         //scheduled transactions are not fetched from the database when getting account transactions
         //so we retrieve those which affect this account and then re-save them later
         //this is necessary because the database has ON DELETE CASCADE between accounts and splits
@@ -142,68 +155,49 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
             transactionList.addAll(account.getTransactions());
             transactionList.addAll(mTransactionsAdapter.getScheduledTransactionsForAccount(account.getUID()));
         }
-        long nRow = super.bulkAddRecords(accountList);
+        long nRow = super.bulkAddRecords(accountList, updateMethod);
 
         if (nRow > 0 && !transactionList.isEmpty()){
-            mTransactionsAdapter.bulkAddRecords(transactionList);
+            mTransactionsAdapter.bulkAddRecords(transactionList, updateMethod);
         }
         return nRow;
     }
 
     @Override
-    protected SQLiteStatement compileReplaceStatement(@NonNull final Account account) {
-        if (mReplaceStatement == null){
-            mReplaceStatement = mDb.compileStatement("REPLACE INTO " + AccountEntry.TABLE_NAME + " ( "
-                    + AccountEntry.COLUMN_UID           + " , "
-                    + AccountEntry.COLUMN_NAME          + " , "
-                    + AccountEntry.COLUMN_DESCRIPTION   + " , "
-                    + AccountEntry.COLUMN_TYPE          + " , "
-                    + AccountEntry.COLUMN_CURRENCY      + " , "
-                    + AccountEntry.COLUMN_COLOR_CODE    + " , "
-                    + AccountEntry.COLUMN_FAVORITE      + " , "
-                    + AccountEntry.COLUMN_FULL_NAME     + " , "
-                    + AccountEntry.COLUMN_PLACEHOLDER   + " , "
-                    + AccountEntry.COLUMN_CREATED_AT    + " , "
-                    + AccountEntry.COLUMN_HIDDEN        + " , "
-                    + AccountEntry.COLUMN_COMMODITY_UID + " , "
-                    + AccountEntry.COLUMN_PARENT_ACCOUNT_UID + " , "
-                    + AccountEntry.COLUMN_DEFAULT_TRANSFER_ACCOUNT_UID + " ) VALUES ( ? , ? , ? , ? , ? , ? , ? , ? , ? , ? , ? , ? , ?, ?)");
-            //commodity_uid is not forgotten. It will be inserted by a database trigger
-        }
-
-        mReplaceStatement.clearBindings();
-        mReplaceStatement.bindString(1, account.getUID());
-        mReplaceStatement.bindString(2, account.getName());
+    protected @NonNull SQLiteStatement setBindings(@NonNull SQLiteStatement stmt, @NonNull final Account account) {
+        stmt.clearBindings();
+        stmt.bindString(1, account.getName());
         if (account.getDescription() != null)
-            mReplaceStatement.bindString(3, account.getDescription());
-        mReplaceStatement.bindString(4, account.getAccountType().name());
-        mReplaceStatement.bindString(5, account.getCurrency().getCurrencyCode());
+            stmt.bindString(2, account.getDescription());
+        stmt.bindString(3, account.getAccountType().name());
+        stmt.bindString(4, account.getCurrency().getCurrencyCode());
         if (account.getColorHexCode() != null) {
-            mReplaceStatement.bindString(6, account.getColorHexCode());
+            stmt.bindString(5, account.getColorHexCode());
         }
-        mReplaceStatement.bindLong(7, account.isFavorite() ? 1 : 0);
-        mReplaceStatement.bindString(8, account.getFullName());
-        mReplaceStatement.bindLong(9, account.isPlaceholderAccount() ? 1 : 0);
-        mReplaceStatement.bindString(10, account.getCreatedTimestamp().toString());
-        mReplaceStatement.bindLong(11, account.isHidden() ? 1 : 0);
+        stmt.bindLong(6, account.isFavorite() ? 1 : 0);
+        stmt.bindString(7, account.getFullName());
+        stmt.bindLong(8, account.isPlaceholderAccount() ? 1 : 0);
+        stmt.bindString(9, account.getCreatedTimestamp().toString());
+        stmt.bindLong(10, account.isHidden() ? 1 : 0);
         Commodity commodity = account.getCommodity();
         if (commodity == null)
-            commodity = CommoditiesDbAdapter.getInstance().getCommodity(account.getCurrency().getCurrencyCode());
+            commodity = new CommoditiesDbAdapter(mDb).getCommodity(account.getCurrency().getCurrencyCode());
 
-        mReplaceStatement.bindString(12, commodity.getUID());
+        stmt.bindString(11, commodity.getUID());
 
         String parentAccountUID = account.getParentUID();
         if (parentAccountUID == null && account.getAccountType() != AccountType.ROOT) {
             parentAccountUID = getOrCreateGnuCashRootAccountUID();
         }
         if (parentAccountUID != null) {
-            mReplaceStatement.bindString(13, parentAccountUID);
+            stmt.bindString(12, parentAccountUID);
         }
         if (account.getDefaultTransferAccountUID() != null) {
-            mReplaceStatement.bindString(14, account.getDefaultTransferAccountUID());
+            stmt.bindString(13, account.getDefaultTransferAccountUID());
         }
+        stmt.bindString(14, account.getUID());
 
-        return mReplaceStatement;
+        return stmt;
     }
 
     /**
@@ -551,7 +545,7 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
             account.setParentUID(getOrCreateGnuCashRootAccountUID());
             account.setHidden(!GnuCashApplication.isDoubleEntryEnabled());
             account.setColorCode("#964B00");
-            addRecord(account);
+            addRecord(account, UpdateMethod.insert);
             uid = account.getUID();
         }
         return uid;
@@ -601,7 +595,7 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
             parentName += ACCOUNT_NAME_SEPARATOR;
         }
         if (accountsList.size() > 0) {
-            bulkAddRecords(accountsList);
+            bulkAddRecords(accountsList, UpdateMethod.insert);
         }
         // if fullName is not empty, loop will be entered and then uid will never be null
         //noinspection ConstantConditions
@@ -798,8 +792,10 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
     public Money getAccountsBalance(@NonNull  List<String> accountUIDList, long startTimestamp, long endTimestamp) {
         String currencyCode = GnuCashApplication.getDefaultCurrencyCode();
         Money balance = Money.createZeroInstance(currencyCode);
+
         if (accountUIDList.isEmpty())
             return balance;
+
         boolean hasDebitNormalBalance = getAccountType(accountUIDList.get(0)).hasDebitNormalBalance();
 
         SplitsDbAdapter splitsDbAdapter = SplitsDbAdapter.getInstance();
@@ -931,7 +927,7 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
             cursor.close();
         }
         // No ROOT exits, create a new one
-        Account rootAccount = new Account("ROOT Account");
+        Account rootAccount = new Account("ROOT Account", new CommoditiesDbAdapter(mDb).getCommodity("USD"));
         rootAccount.setAccountType(AccountType.ROOT);
         rootAccount.setFullName(ROOT_ACCOUNT_FULL_NAME);
         rootAccount.setHidden(true);

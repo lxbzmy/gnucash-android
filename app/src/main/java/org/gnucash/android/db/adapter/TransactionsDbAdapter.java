@@ -37,6 +37,7 @@ import org.gnucash.android.model.Money;
 import org.gnucash.android.model.Split;
 import org.gnucash.android.model.Transaction;
 
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -61,9 +62,18 @@ public class TransactionsDbAdapter extends DatabaseAdapter<Transaction> {
      * @param db SQlite db instance
      */
     public TransactionsDbAdapter(SQLiteDatabase db, SplitsDbAdapter splitsDbAdapter) {
-        super(db, TransactionEntry.TABLE_NAME);
+        super(db, TransactionEntry.TABLE_NAME, new String[]{
+                TransactionEntry.COLUMN_DESCRIPTION,
+                TransactionEntry.COLUMN_NOTES,
+                TransactionEntry.COLUMN_TIMESTAMP,
+                TransactionEntry.COLUMN_EXPORTED,
+                TransactionEntry.COLUMN_CURRENCY,
+                TransactionEntry.COLUMN_COMMODITY_UID,
+                TransactionEntry.COLUMN_CREATED_AT,
+                TransactionEntry.COLUMN_SCHEDX_ACTION_UID,
+                TransactionEntry.COLUMN_TEMPLATE
+        });
         mSplitsDbAdapter = splitsDbAdapter;
-        LOG_TAG = "TransactionsDbAdapter";
     }
 
     /**
@@ -85,7 +95,7 @@ public class TransactionsDbAdapter extends DatabaseAdapter<Transaction> {
 	 * @param transaction {@link Transaction} to be inserted to database
 	 */
     @Override
-	public void addRecord(@NonNull Transaction transaction){
+	public void addRecord(@NonNull Transaction transaction, UpdateMethod updateMethod){
         Log.d(LOG_TAG, "Replacing transaction in db");
         mDb.beginTransaction();
         try {
@@ -94,13 +104,17 @@ public class TransactionsDbAdapter extends DatabaseAdapter<Transaction> {
                 String imbalanceAccountUID = AccountsDbAdapter.getInstance().getOrCreateImbalanceAccountUID(transaction.getCurrency());
                 imbalanceSplit.setAccountUID(imbalanceAccountUID);
             }
-            super.addRecord(transaction);
+            super.addRecord(transaction, updateMethod);
 
             Log.d(LOG_TAG, "Adding splits for transaction");
             ArrayList<String> splitUIDs = new ArrayList<>(transaction.getSplits().size());
             for (Split split : transaction.getSplits()) {
                 Log.d(LOG_TAG, "Replace transaction split in db");
-                mSplitsDbAdapter.addRecord(split);
+                if (imbalanceSplit == split) {
+                    mSplitsDbAdapter.addRecord(split, UpdateMethod.insert);
+                } else {
+                    mSplitsDbAdapter.addRecord(split, updateMethod);
+                }
                 splitUIDs.add(split.getUID());
             }
             Log.d(LOG_TAG, transaction.getSplits().size() + " splits added");
@@ -130,9 +144,9 @@ public class TransactionsDbAdapter extends DatabaseAdapter<Transaction> {
      * @return Number of transactions inserted
      */
     @Override
-    public long bulkAddRecords(@NonNull List<Transaction> transactionList){
+    public long bulkAddRecords(@NonNull List<Transaction> transactionList, UpdateMethod updateMethod){
         long start = System.nanoTime();
-        long rowInserted = super.bulkAddRecords(transactionList);
+        long rowInserted = super.bulkAddRecords(transactionList, updateMethod);
         long end = System.nanoTime();
         Log.d(getClass().getSimpleName(), String.format("bulk add transaction time %d ", end - start));
         List<Split> splitList = new ArrayList<>(transactionList.size()*3);
@@ -142,7 +156,7 @@ public class TransactionsDbAdapter extends DatabaseAdapter<Transaction> {
         if (rowInserted != 0 && !splitList.isEmpty()) {
             try {
                 start = System.nanoTime();
-                long nSplits = mSplitsDbAdapter.bulkAddRecords(splitList);
+                long nSplits = mSplitsDbAdapter.bulkAddRecords(splitList, updateMethod);
                 Log.d(LOG_TAG, String.format("%d splits inserted in %d ns", nSplits, System.nanoTime()-start));
             }
             finally {
@@ -158,43 +172,29 @@ public class TransactionsDbAdapter extends DatabaseAdapter<Transaction> {
     }
 
     @Override
-    protected SQLiteStatement compileReplaceStatement(@NonNull final Transaction transaction) {
-        if (mReplaceStatement == null) {
-            mReplaceStatement = mDb.compileStatement("REPLACE INTO " + TransactionEntry.TABLE_NAME + " ( "
-                    + TransactionEntry.COLUMN_UID + " , "
-                    + TransactionEntry.COLUMN_DESCRIPTION + " , "
-                    + TransactionEntry.COLUMN_NOTES + " , "
-                    + TransactionEntry.COLUMN_TIMESTAMP + " , "
-                    + TransactionEntry.COLUMN_EXPORTED + " , "
-                    + TransactionEntry.COLUMN_CURRENCY + " , "
-                    + TransactionEntry.COLUMN_COMMODITY_UID + " , "
-                    + TransactionEntry.COLUMN_CREATED_AT + " , "
-                    + TransactionEntry.COLUMN_SCHEDX_ACTION_UID + " , "
-                    + TransactionEntry.COLUMN_TEMPLATE + " ) VALUES ( ? , ? , ? , ?, ? , ? , ? , ?, ? , ?)");
-        }
-
-        mReplaceStatement.clearBindings();
-        mReplaceStatement.bindString(1, transaction.getUID());
-        mReplaceStatement.bindString(2, transaction.getDescription());
-        mReplaceStatement.bindString(3, transaction.getNote());
-        mReplaceStatement.bindLong(4,   transaction.getTimeMillis());
-        mReplaceStatement.bindLong(5, transaction.isExported() ? 1 : 0);
-        mReplaceStatement.bindString(6, transaction.getCurrencyCode());
+    protected @NonNull SQLiteStatement setBindings(@NonNull SQLiteStatement stmt, @NonNull Transaction transaction) {
+        stmt.clearBindings();
+        stmt.bindString(1, transaction.getDescription());
+        stmt.bindString(2, transaction.getNote());
+        stmt.bindLong(3, transaction.getTimeMillis());
+        stmt.bindLong(4, transaction.isExported() ? 1 : 0);
+        stmt.bindString(5, transaction.getCurrencyCode());
 
         Commodity commodity = transaction.getCommodity();
         if (commodity == null)
             commodity = CommoditiesDbAdapter.getInstance().getCommodity(transaction.getCurrencyCode());
 
-        mReplaceStatement.bindString(7, commodity.getUID());
-        mReplaceStatement.bindString(8, transaction.getCreatedTimestamp().toString());
+        stmt.bindString(6, commodity.getUID());
+        stmt.bindString(7, transaction.getCreatedTimestamp().toString());
 
         if (transaction.getScheduledActionUID() == null)
-            mReplaceStatement.bindNull(9);
+            stmt.bindNull(8);
         else
-            mReplaceStatement.bindString(9,  transaction.getScheduledActionUID());
-        mReplaceStatement.bindLong(10, transaction.isTemplate() ? 1 : 0);
+            stmt.bindString(8, transaction.getScheduledActionUID());
+        stmt.bindLong(9, transaction.isTemplate() ? 1 : 0);
+        stmt.bindString(10, transaction.getUID());
 
-        return mReplaceStatement;
+        return stmt;
     }
 
     /**
@@ -464,7 +464,7 @@ public class TransactionsDbAdapter extends DatabaseAdapter<Transaction> {
         for (Split split : splits) {
             split.setAccountUID(dstAccountUID);
         }
-        mSplitsDbAdapter.bulkAddRecords(splits);
+        mSplitsDbAdapter.bulkAddRecords(splits, UpdateMethod.update);
         return splits.size();
 	}
 	
@@ -631,6 +631,26 @@ public class TransactionsDbAdapter extends DatabaseAdapter<Transaction> {
      */
     public long getTimestampOfLatestTransaction(AccountType type, String currencyCode) {
         return getTimestamp("MAX", type, currencyCode);
+    }
+
+    /**
+     * Returns the most recent `modified_at` timestamp of non-template transactions in the database
+     * @return Last moodified time in milliseconds or current time if there is none in the database
+     */
+    public Timestamp getTimestampOfLastModification(){
+        Cursor cursor = mDb.query(TransactionEntry.TABLE_NAME,
+                new String[]{"MAX(" + TransactionEntry.COLUMN_MODIFIED_AT + ")"},
+                null, null, null, null, null);
+
+        Timestamp timestamp = new Timestamp(System.currentTimeMillis());
+        if (cursor.moveToFirst()){
+            String timeString = cursor.getString(0);
+            if (timeString != null){ //in case there were no transactions in the XML file (account structure only)
+                timestamp = Timestamp.valueOf(timeString);
+            }
+        }
+        cursor.close();
+        return timestamp;
     }
 
     /**

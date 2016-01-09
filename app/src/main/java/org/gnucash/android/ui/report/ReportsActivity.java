@@ -28,6 +28,7 @@ import android.support.v4.app.FragmentManager;
 import android.support.v4.app.FragmentTransaction;
 import android.support.v7.app.ActionBar;
 import android.support.v7.widget.Toolbar;
+import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
@@ -41,7 +42,7 @@ import org.gnucash.android.app.GnuCashApplication;
 import org.gnucash.android.db.adapter.TransactionsDbAdapter;
 import org.gnucash.android.model.AccountType;
 import org.gnucash.android.ui.common.BaseDrawerActivity;
-import org.gnucash.android.ui.report.dialog.DateRangePickerDialogFragment;
+import org.gnucash.android.ui.util.dialog.DateRangePickerDialogFragment;
 import org.joda.time.LocalDate;
 
 import java.util.Arrays;
@@ -53,7 +54,10 @@ import butterknife.Bind;
 import butterknife.ButterKnife;
 
 /**
- * base activity for reporting
+ * Activity for displaying report fragments (which must implement {@link BaseReportFragment})
+ * <p>In order to add new reports, extend the {@link BaseReportFragment} class to provide the view
+ * for the report. Then add the report mapping in {@link ReportType} constructor depending on what
+ * kind of report it is. The report will be dynamically included at runtime.</p>
  *
  * @author Oleksandr Tyshkovets <olexandr.tyshkovets@gmail.com>
  * @author Ngewi Fet <ngewif@gmail.com>
@@ -73,17 +77,18 @@ public class ReportsActivity extends BaseDrawerActivity implements AdapterView.O
 
     @Bind(R.id.time_range_spinner) Spinner mTimeRangeSpinner;
     @Bind(R.id.report_account_type_spinner) Spinner mAccountTypeSpinner;
-    @Bind(R.id.report_type_spinner) Spinner mReportTypeSpinner;
+    @Bind(R.id.toolbar_spinner) Spinner mReportTypeSpinner;
 
     private TransactionsDbAdapter mTransactionsDbAdapter;
     private AccountType mAccountType = AccountType.EXPENSE;
     private ReportType mReportType = ReportType.NONE;
+    private ReportsOverviewFragment mReportsOverviewFragment;
 
     public enum GroupInterval {WEEK, MONTH, QUARTER, YEAR, ALL}
 
     // default time range is the last 3 months
-    private long mReportStartTime = new LocalDate().minusMonths(2).dayOfMonth().withMinimumValue().toDate().getTime();
-    private long mReportEndTime = new LocalDate().plusDays(1).toDate().getTime();
+    private long mReportPeriodStart = new LocalDate().minusMonths(2).dayOfMonth().withMinimumValue().toDate().getTime();
+    private long mReportPeriodEnd = new LocalDate().plusDays(1).toDate().getTime();
 
     private GroupInterval mReportGroupInterval = GroupInterval.MONTH;
     private boolean mSkipNextReportTypeSelectedRun = false;
@@ -107,22 +112,20 @@ public class ReportsActivity extends BaseDrawerActivity implements AdapterView.O
     };
 
     @Override
+    public int getContentView() {
+        return R.layout.activity_reports;
+    }
+
+    @Override
+    public int getTitleRes() {
+        return R.string.title_reports;
+    }
+
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_reports);
-        setUpDrawer();
-        ButterKnife.bind(this);
-
-        Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-        setSupportActionBar(toolbar);
-
-        ActionBar actionBar = getSupportActionBar();
-        assert actionBar != null;
-        actionBar.setTitle(R.string.title_reports);
-        actionBar.setDisplayHomeAsUpEnabled(true);
 
         mTransactionsDbAdapter = TransactionsDbAdapter.getInstance();
-
 
         ArrayAdapter<CharSequence> adapter = ArrayAdapter.createFromResource(this, R.array.report_time_range,
                 android.R.layout.simple_spinner_item);
@@ -149,13 +152,24 @@ public class ReportsActivity extends BaseDrawerActivity implements AdapterView.O
             }
         });
 
-        mReportTypeSpinner.setOnItemSelectedListener(mReportTypeSelectedListener);
+        mReportsOverviewFragment = new ReportsOverviewFragment();
 
         if (savedInstanceState == null) {
-            loadFragment(new ReportSummaryFragment());
+            loadFragment(mReportsOverviewFragment);
         }
     }
 
+    @Override
+    public void onAttachFragment(Fragment fragment) {
+        super.onAttachFragment(fragment);
+        BaseReportFragment reportFragment = (BaseReportFragment)fragment;
+        updateReportTypeSpinner(reportFragment.getReportType(), getString(reportFragment.getTitle()));
+    }
+
+    /**
+     * Load the provided fragment into the view replacing the previous one
+     * @param fragment BaseReportFragment instance
+     */
     private void loadFragment(BaseReportFragment fragment) {
         FragmentManager fragmentManager = getSupportFragmentManager();
         FragmentTransaction fragmentTransaction = fragmentManager
@@ -168,19 +182,31 @@ public class ReportsActivity extends BaseDrawerActivity implements AdapterView.O
     /**
      * Update the report type spinner
      */
-    public void updateReportTypeSpinner(ReportType reportType) {
+    public void updateReportTypeSpinner(ReportType reportType, String reportName) {
+        if (reportType == mReportType)//if it is the same report type, don't change anything
+            return;
+
         mReportType = reportType;
         ActionBar actionBar = getSupportActionBar();
         assert actionBar != null;
         ArrayAdapter<String> arrayAdapter = new ArrayAdapter<>(actionBar.getThemedContext(),
                 android.R.layout.simple_list_item_1,
                 mReportType.getReportNames());
-        mSkipNextReportTypeSelectedRun = true;
-        mReportTypeSpinner.setOnItemSelectedListener(mReportTypeSelectedListener);
+
+        mSkipNextReportTypeSelectedRun = true; //selection event will be fired again
         mReportTypeSpinner.setAdapter(arrayAdapter);
+        mReportTypeSpinner.setSelection(arrayAdapter.getPosition(reportName));
+        mReportTypeSpinner.setOnItemSelectedListener(mReportTypeSelectedListener);
 
 
-        if (arrayAdapter.isEmpty() || mReportType == ReportType.NONE){
+        toggleToolbarTitleVisibility();
+    }
+
+    public void toggleToolbarTitleVisibility() {
+        ActionBar actionBar = getSupportActionBar();
+        assert actionBar != null;
+
+        if (mReportType == ReportType.NONE){
             mReportTypeSpinner.setVisibility(View.GONE);
         } else {
             mReportTypeSpinner.setVisibility(View.VISIBLE);
@@ -207,7 +233,7 @@ public class ReportsActivity extends BaseDrawerActivity implements AdapterView.O
         List<Fragment> fragments = getSupportFragmentManager().getFragments();
         for (Fragment fragment : fragments) {
             if (fragment instanceof ReportOptionsListener){
-                ((ReportOptionsListener) fragment).onTimeRangeUpdated(mReportStartTime, mReportEndTime);
+                ((ReportOptionsListener) fragment).onTimeRangeUpdated(mReportPeriodStart, mReportPeriodEnd);
             }
         }
     }
@@ -277,23 +303,23 @@ public class ReportsActivity extends BaseDrawerActivity implements AdapterView.O
 
     @Override
     public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-        mReportEndTime = new LocalDate().plusDays(1).toDate().getTime();
+        mReportPeriodEnd = new LocalDate().plusDays(1).toDate().getTime();
         switch (position){
             case 0: //current month
-                mReportStartTime = new LocalDate().dayOfMonth().withMinimumValue().toDate().getTime();
+                mReportPeriodStart = new LocalDate().dayOfMonth().withMinimumValue().toDate().getTime();
                 break;
             case 1: // last 3 months. x-2, x-1, x
-                mReportStartTime = new LocalDate().minusMonths(2).dayOfMonth().withMinimumValue().toDate().getTime();
+                mReportPeriodStart = new LocalDate().minusMonths(2).dayOfMonth().withMinimumValue().toDate().getTime();
                 break;
             case 2:
-                mReportStartTime = new LocalDate().minusMonths(5).dayOfMonth().withMinimumValue().toDate().getTime();
+                mReportPeriodStart = new LocalDate().minusMonths(5).dayOfMonth().withMinimumValue().toDate().getTime();
                 break;
             case 3:
-                mReportStartTime = new LocalDate().minusMonths(11).dayOfMonth().withMinimumValue().toDate().getTime();
+                mReportPeriodStart = new LocalDate().minusMonths(11).dayOfMonth().withMinimumValue().toDate().getTime();
                 break;
             case 4: //ALL TIME
-                mReportStartTime = -1;
-                mReportEndTime = -1;
+                mReportPeriodStart = -1;
+                mReportPeriodEnd = -1;
                 break;
             case 5:
                 String mCurrencyCode = GnuCashApplication.getDefaultCurrencyCode();
@@ -319,14 +345,14 @@ public class ReportsActivity extends BaseDrawerActivity implements AdapterView.O
     public void onDateSet(DatePicker view, int year, int monthOfYear, int dayOfMonth) {
         Calendar calendar = Calendar.getInstance();
         calendar.set(year, monthOfYear, dayOfMonth);
-        mReportStartTime = calendar.getTimeInMillis();
+        mReportPeriodStart = calendar.getTimeInMillis();
         updateDateRangeOnFragment();
     }
 
     @Override
     public void onDateRangeSet(Date startDate, Date endDate) {
-        mReportStartTime = startDate.getTime();
-        mReportEndTime = endDate.getTime();
+        mReportPeriodStart = startDate.getTime();
+        mReportPeriodEnd = endDate.getTime();
         updateDateRangeOnFragment();
 
     }
@@ -335,12 +361,30 @@ public class ReportsActivity extends BaseDrawerActivity implements AdapterView.O
         return mAccountType;
     }
 
-    public long getReportEndTime() {
-        return mReportEndTime;
+    /**
+     * Return the end time of the reporting period
+     * @return Time in millis
+     */
+    public long getReportPeriodEnd() {
+        return mReportPeriodEnd;
     }
 
-    public long getReportStartTime() {
-        return mReportStartTime;
+    /**
+     * Return the start time of the reporting period
+     * @return Time in millis
+     */
+    public long getReportPeriodStart() {
+        return mReportPeriodStart;
     }
 
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK){
+            if (mReportType != ReportType.NONE){
+                loadFragment(mReportsOverviewFragment);
+                return true;
+            }
+        }
+        return super.onKeyUp(keyCode, event);
+    }
 }

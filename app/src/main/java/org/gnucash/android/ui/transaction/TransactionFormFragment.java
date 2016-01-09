@@ -24,7 +24,6 @@ import android.content.res.Configuration;
 import android.database.Cursor;
 import android.inputmethodservice.KeyboardView;
 import android.os.Bundle;
-import android.preference.PreferenceManager;
 import android.support.v4.app.Fragment;
 import android.support.v4.widget.SimpleCursorAdapter;
 import android.support.v7.app.ActionBar;
@@ -60,6 +59,7 @@ import org.gnucash.android.app.GnuCashApplication;
 import org.gnucash.android.db.adapter.CommoditiesDbAdapter;
 import org.gnucash.android.db.DatabaseSchema;
 import org.gnucash.android.db.adapter.AccountsDbAdapter;
+import org.gnucash.android.db.adapter.DatabaseAdapter;
 import org.gnucash.android.db.adapter.ScheduledActionDbAdapter;
 import org.gnucash.android.db.adapter.TransactionsDbAdapter;
 import org.gnucash.android.model.AccountType;
@@ -73,8 +73,8 @@ import org.gnucash.android.model.TransactionType;
 import org.gnucash.android.ui.common.FormActivity;
 import org.gnucash.android.ui.common.UxArgument;
 import org.gnucash.android.ui.homescreen.WidgetConfigurationActivity;
+import org.gnucash.android.ui.settings.PreferenceActivity;
 import org.gnucash.android.ui.transaction.dialog.TransferFundsDialogFragment;
-import org.gnucash.android.ui.util.OnTransferFundsListener;
 import org.gnucash.android.ui.util.RecurrenceParser;
 import org.gnucash.android.ui.util.RecurrenceViewClickListener;
 import org.gnucash.android.ui.util.widget.CalculatorEditText;
@@ -91,7 +91,6 @@ import java.util.Currency;
 import java.util.Date;
 import java.util.GregorianCalendar;
 import java.util.List;
-import java.util.Locale;
 
 import butterknife.Bind;
 import butterknife.ButterKnife;
@@ -292,7 +291,7 @@ public class TransactionFormFragment extends Fragment implements
 		super.onActivityCreated(savedInstanceState);
 		setHasOptionsMenu(true);
 
-		SharedPreferences sharedPrefs = PreferenceManager.getDefaultSharedPreferences(getActivity());
+		SharedPreferences sharedPrefs = PreferenceActivity.getActiveBookSharedPreferences(getActivity());
 		mUseDoubleEntry = sharedPrefs.getBoolean(getString(R.string.key_use_double_entry), false);
 		if (!mUseDoubleEntry){
 			mDoubleEntryLayout.setVisibility(View.GONE);
@@ -493,6 +492,9 @@ public class TransactionFormFragment extends Fragment implements
 		Currency accountCurrency = Currency.getInstance(currencyCode);
 		mCurrencyTextView.setText(accountCurrency.getSymbol());
 
+        Commodity commodity = Commodity.getInstance(currencyCode);
+        mAmountEditText.setCommodity(commodity);
+
         mSaveTemplateCheckbox.setChecked(mTransaction.isTemplate());
         String scheduledActionUID = getArguments().getString(UxArgument.SCHEDULED_ACTION_UID);
         if (scheduledActionUID != null && !scheduledActionUID.isEmpty()) {
@@ -533,7 +535,7 @@ public class TransactionFormFragment extends Fragment implements
 		mTime = mDate = Calendar.getInstance();
 
         mTransactionTypeSwitch.setAccountType(mAccountType);
-		String typePref = PreferenceManager.getDefaultSharedPreferences(getActivity()).getString(getString(R.string.key_default_transaction_type), "DEBIT");
+		String typePref = PreferenceActivity.getActiveBookSharedPreferences(getActivity()).getString(getString(R.string.key_default_transaction_type), "DEBIT");
         mTransactionTypeSwitch.setChecked(TransactionType.valueOf(typePref));
 
 		String code = GnuCashApplication.getDefaultCurrencyCode();
@@ -542,6 +544,9 @@ public class TransactionFormFragment extends Fragment implements
 		}
 		Currency accountCurrency = Currency.getInstance(code);
 		mCurrencyTextView.setText(accountCurrency.getSymbol());
+
+        Commodity commodity = Commodity.getInstance(code);
+        mAmountEditText.setCommodity(commodity);
 
         if (mUseDoubleEntry){
             String currentAccountUID = mAccountUID;
@@ -752,8 +757,8 @@ public class TransactionFormFragment extends Fragment implements
                     mTransaction.addSplit(split);
 
                     String transferAcctUID;
-                    if (mUseDoubleEntry) {
-                        long transferAcctId = mTransferAccountSpinner.getSelectedItemId();
+                    long transferAcctId = mTransferAccountSpinner.getSelectedItemId();
+                    if (mUseDoubleEntry || transferAcctId < 0) {
                         transferAcctUID = mAccountsDbAdapter.getUID(transferAcctId);
                     } else {
                         transferAcctUID = mAccountsDbAdapter.getOrCreateImbalanceAccountUID(currency);
@@ -783,13 +788,16 @@ public class TransactionFormFragment extends Fragment implements
 
             // set as not exported because we have just edited it
             mTransaction.setExported(false);
-            mTransactionsDbAdapter.addRecord(mTransaction);
+            // 1) mTransactions may be existing or non-existing
+            // 2) when mTransactions exists in the db, the splits may exist or not exist in the db
+            // So replace is chosen.
+            mTransactionsDbAdapter.addRecord(mTransaction, DatabaseAdapter.UpdateMethod.replace);
 
             if (mSaveTemplateCheckbox.isChecked()) {//template is automatically checked when a transaction is scheduled
                 if (!mEditMode) { //means it was new transaction, so a new template
                     Transaction templateTransaction = new Transaction(mTransaction, true);
                     templateTransaction.setTemplate(true);
-                    mTransactionsDbAdapter.addRecord(templateTransaction);
+                    mTransactionsDbAdapter.addRecord(templateTransaction, DatabaseAdapter.UpdateMethod.replace);
                     scheduleRecurringTransaction(templateTransaction.getUID());
                 } else
                     scheduleRecurringTransaction(mTransaction.getUID());
@@ -837,7 +845,7 @@ public class TransactionFormFragment extends Fragment implements
         } else {
             if (recurrence != null) {
                 scheduledAction.setActionUID(transactionUID);
-                scheduledActionDbAdapter.addRecord(scheduledAction);
+                scheduledActionDbAdapter.addRecord(scheduledAction, DatabaseAdapter.UpdateMethod.replace);
                 Toast.makeText(getActivity(), R.string.toast_scheduled_recurring_transaction, Toast.LENGTH_SHORT).show();
             }
         }

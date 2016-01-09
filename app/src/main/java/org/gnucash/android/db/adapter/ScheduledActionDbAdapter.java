@@ -41,9 +41,26 @@ public class ScheduledActionDbAdapter extends DatabaseAdapter<ScheduledAction> {
 
     RecurrenceDbAdapter mRecurrenceDbAdapter;
 
-    public ScheduledActionDbAdapter(SQLiteDatabase db){
-        super(db, ScheduledActionEntry.TABLE_NAME);
-        mRecurrenceDbAdapter = new RecurrenceDbAdapter(db);
+    public ScheduledActionDbAdapter(SQLiteDatabase db, RecurrenceDbAdapter recurrenceDbAdapter){
+        super(db, ScheduledActionEntry.TABLE_NAME,  new String[]{
+                ScheduledActionEntry.COLUMN_ACTION_UID        ,
+                ScheduledActionEntry.COLUMN_TYPE              ,
+                ScheduledActionEntry.COLUMN_START_TIME        ,
+                ScheduledActionEntry.COLUMN_END_TIME          ,
+                ScheduledActionEntry.COLUMN_LAST_RUN 		  ,
+                ScheduledActionEntry.COLUMN_ENABLED           ,
+                ScheduledActionEntry.COLUMN_CREATED_AT        ,
+                ScheduledActionEntry.COLUMN_TAG               ,
+                ScheduledActionEntry.COLUMN_TOTAL_FREQUENCY   ,
+                ScheduledActionEntry.COLUMN_RECURRENCE_UID    ,
+                ScheduledActionEntry.COLUMN_AUTO_CREATE       ,
+                ScheduledActionEntry.COLUMN_AUTO_NOTIFY       ,
+                ScheduledActionEntry.COLUMN_ADVANCE_CREATION  ,
+                ScheduledActionEntry.COLUMN_ADVANCE_NOTIFY    ,
+                ScheduledActionEntry.COLUMN_TEMPLATE_ACCT_UID ,
+                ScheduledActionEntry.COLUMN_EXECUTION_COUNT
+        });
+        mRecurrenceDbAdapter = recurrenceDbAdapter;
         LOG_TAG = "ScheduledActionDbAdapter";
     }
 
@@ -56,23 +73,23 @@ public class ScheduledActionDbAdapter extends DatabaseAdapter<ScheduledAction> {
     }
 
     @Override
-    public void addRecord(@NonNull ScheduledAction scheduledAction) {
-        mRecurrenceDbAdapter.addRecord(scheduledAction.getRecurrence());
-        super.addRecord(scheduledAction);
+    public void addRecord(@NonNull ScheduledAction scheduledAction, UpdateMethod updateMethod) {
+        mRecurrenceDbAdapter.addRecord(scheduledAction.getRecurrence(), updateMethod);
+        super.addRecord(scheduledAction, updateMethod);
     }
 
     @Override
-    public long bulkAddRecords(@NonNull List<ScheduledAction> scheduledActions) {
+    public long bulkAddRecords(@NonNull List<ScheduledAction> scheduledActions, UpdateMethod updateMethod) {
         List<Recurrence> recurrenceList = new ArrayList<>(scheduledActions.size());
         for (ScheduledAction scheduledAction : scheduledActions) {
             recurrenceList.add(scheduledAction.getRecurrence());
         }
 
         //first add the recurrences, they have no dependencies (foreign key constraints)
-        long nRecurrences = mRecurrenceDbAdapter.bulkAddRecords(recurrenceList);
+        long nRecurrences = mRecurrenceDbAdapter.bulkAddRecords(recurrenceList, updateMethod);
         Log.d(LOG_TAG, String.format("Added %d recurrences for scheduled actions", nRecurrences));
 
-        return super.bulkAddRecords(scheduledActions);
+        return super.bulkAddRecords(scheduledActions, updateMethod);
     }
 
     /**
@@ -92,7 +109,7 @@ public class ScheduledActionDbAdapter extends DatabaseAdapter<ScheduledAction> {
 
         Recurrence recurrence = scheduledAction.getRecurrence();
         recurrence.setUID(recurrenceUID);
-        recurrenceDbAdapter.addRecord(recurrence);
+        recurrenceDbAdapter.addRecord(recurrence, UpdateMethod.update);
 
         ContentValues contentValues = new ContentValues();
         extractBaseModelAttributes(contentValues, scheduledAction);
@@ -107,56 +124,32 @@ public class ScheduledActionDbAdapter extends DatabaseAdapter<ScheduledAction> {
         return mDb.update(ScheduledActionEntry.TABLE_NAME, contentValues, where, whereArgs);
     }
 
-
     @Override
-    protected SQLiteStatement compileReplaceStatement(@NonNull final ScheduledAction schedxAction) {
-        if (mReplaceStatement == null) {
-            mReplaceStatement = mDb.compileStatement("REPLACE INTO " + ScheduledActionEntry.TABLE_NAME + " ( "
-                    + ScheduledActionEntry.COLUMN_UID 	            + " , "
-                    + ScheduledActionEntry.COLUMN_ACTION_UID        + " , "
-                    + ScheduledActionEntry.COLUMN_TYPE              + " , "
-                    + ScheduledActionEntry.COLUMN_START_TIME        + " , "
-                    + ScheduledActionEntry.COLUMN_END_TIME          + " , "
-                    + ScheduledActionEntry.COLUMN_LAST_RUN 		    + " , "
-                    + ScheduledActionEntry.COLUMN_ENABLED           + " , "
-                    + ScheduledActionEntry.COLUMN_CREATED_AT        + " , "
-                    + ScheduledActionEntry.COLUMN_TAG               + " , "
-                    + ScheduledActionEntry.COLUMN_TOTAL_FREQUENCY   + " , "
-                    + ScheduledActionEntry.COLUMN_RECURRENCE_UID    + " , "
-                    + ScheduledActionEntry.COLUMN_AUTO_CREATE       + " , "
-                    + ScheduledActionEntry.COLUMN_AUTO_NOTIFY       + " , "
-                    + ScheduledActionEntry.COLUMN_ADVANCE_CREATION  + " , "
-                    + ScheduledActionEntry.COLUMN_ADVANCE_NOTIFY    + " , "
-                    + ScheduledActionEntry.COLUMN_TEMPLATE_ACCT_UID + " , "
-                    + ScheduledActionEntry.COLUMN_EXECUTION_COUNT   + " ) VALUES ( ? , ? , ? , ? , ? , ? , ? , ? , ? , ? , ? , ? , ? , ? , ? , ? , ? )");
-        }
-
-        mReplaceStatement.clearBindings();
-        mReplaceStatement.bindString(1, schedxAction.getUID());
-        mReplaceStatement.bindString(2, schedxAction.getActionUID());
-        mReplaceStatement.bindString(3, schedxAction.getActionType().name());
-        mReplaceStatement.bindLong(4,   schedxAction.getStartTime());
-        mReplaceStatement.bindLong(5, schedxAction.getEndTime());
-        mReplaceStatement.bindLong(6, schedxAction.getLastRunTime());
-        mReplaceStatement.bindLong(7, schedxAction.isEnabled() ? 1 : 0);
-        mReplaceStatement.bindString(8, schedxAction.getCreatedTimestamp().toString());
+    protected @NonNull SQLiteStatement setBindings(@NonNull SQLiteStatement stmt, @NonNull final ScheduledAction schedxAction) {
+        stmt.clearBindings();
+        stmt.bindString(1, schedxAction.getActionUID());
+        stmt.bindString(2, schedxAction.getActionType().name());
+        stmt.bindLong(3,   schedxAction.getStartTime());
+        stmt.bindLong(4, schedxAction.getEndTime());
+        stmt.bindLong(5, schedxAction.getLastRunTime());
+        stmt.bindLong(6, schedxAction.isEnabled() ? 1 : 0);
+        stmt.bindString(7, schedxAction.getCreatedTimestamp().toString());
         if (schedxAction.getTag() == null)
-            mReplaceStatement.bindNull(9);
+            stmt.bindNull(8);
         else
-            mReplaceStatement.bindString(9, schedxAction.getTag());
-        mReplaceStatement.bindString(10, Integer.toString(schedxAction.getTotalFrequency()));
-        mReplaceStatement.bindString(11, schedxAction.getRecurrence().getUID());
-        mReplaceStatement.bindLong(12,   schedxAction.shouldAutoCreate() ? 1 : 0);
-        mReplaceStatement.bindLong(13,   schedxAction.shouldAutoNotify() ? 1 : 0);
-        mReplaceStatement.bindLong(14,   schedxAction.getAdvanceCreateDays());
-        mReplaceStatement.bindLong(15,   schedxAction.getAdvanceNotifyDays());
-        mReplaceStatement.bindString(16, schedxAction.getTemplateAccountUID());
+            stmt.bindString(9, schedxAction.getTag());
+        stmt.bindString(9, Integer.toString(schedxAction.getTotalFrequency()));
+        stmt.bindString(10, schedxAction.getRecurrence().getUID());
+        stmt.bindLong(11,   schedxAction.shouldAutoCreate() ? 1 : 0);
+        stmt.bindLong(12,   schedxAction.shouldAutoNotify() ? 1 : 0);
+        stmt.bindLong(13,   schedxAction.getAdvanceCreateDays());
+        stmt.bindLong(14,   schedxAction.getAdvanceNotifyDays());
+        stmt.bindString(15, schedxAction.getTemplateAccountUID());
 
-        mReplaceStatement.bindString(17, Integer.toString(schedxAction.getExecutionCount()));
-
-        return mReplaceStatement;
+        stmt.bindString(16, Integer.toString(schedxAction.getExecutionCount()));
+        stmt.bindString(17, schedxAction.getUID());
+        return stmt;
     }
-
     /**
      * Builds a {@link org.gnucash.android.model.ScheduledAction} instance from a row to cursor in the database.
      * The cursor should be already pointing to the right entry in the data set. It will not be modified in any way
