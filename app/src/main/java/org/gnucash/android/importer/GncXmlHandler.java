@@ -19,13 +19,11 @@ package org.gnucash.android.importer;
 
 import android.database.sqlite.SQLiteDatabase;
 import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
 import android.util.Log;
 
 import com.crashlytics.android.Crashlytics;
 
 import org.gnucash.android.app.GnuCashApplication;
-import org.gnucash.android.db.BookDbHelper;
 import org.gnucash.android.db.DatabaseHelper;
 import org.gnucash.android.db.adapter.AccountsDbAdapter;
 import org.gnucash.android.db.adapter.BooksDbAdapter;
@@ -43,9 +41,9 @@ import org.gnucash.android.model.Account;
 import org.gnucash.android.model.AccountType;
 import org.gnucash.android.model.BaseModel;
 import org.gnucash.android.model.Book;
-import org.gnucash.android.model.Commodity;
 import org.gnucash.android.model.Budget;
 import org.gnucash.android.model.BudgetAmount;
+import org.gnucash.android.model.Commodity;
 import org.gnucash.android.model.Money;
 import org.gnucash.android.model.PeriodType;
 import org.gnucash.android.model.Price;
@@ -86,6 +84,24 @@ public class GncXmlHandler extends DefaultHandler {
      * Tag for logging
      */
     private static final String LOG_TAG = "GnuCashAccountImporter";
+
+    /*
+        ^             anchor for start of string
+        #             the literal #
+        (             start of group
+        ?:            indicate a non-capturing group that doesn't generate back-references
+        [0-9a-fA-F]   hexadecimal digit
+        {3}           three times
+        )             end of group
+        {2}           repeat twice
+        $             anchor for end of string
+     */
+    /**
+     * Regular expression for validating color code strings.
+     * Accepts #rgb and #rrggbb
+     */
+    //TODO: Allow use of #aarrggbb format as well
+    public static final String ACCOUNT_COLOR_HEX_REGEX = "^#(?:[0-9a-fA-F]{3}){2}$";
 
     /**
      * Adapter for saving the imported accounts
@@ -423,7 +439,13 @@ public class GncXmlHandler extends DefaultHandler {
             case GncXmlHelper.TAG_COMMODITY_ID:
                 String currencyCode = mISO4217Currency ? characterString : NO_CURRENCY_CODE;
                 if (mAccount != null) {
-                    mAccount.setCurrencyCode(currencyCode);
+                    Commodity commodity = mCommoditiesDbAdapter.getCommodity(currencyCode);
+                    if (commodity != null) {
+                        mAccount.setCommodity(commodity);
+                    } else {
+                        throw new SAXException("Commodity with '" + currencyCode
+                                + "' currency code not found in the database");
+                    }
                     if (mCurrencyCount.containsKey(currencyCode)) {
                         mCurrencyCount.put(currencyCode, mCurrencyCount.get(currencyCode) + 1);
                     } else {
@@ -519,11 +541,11 @@ public class GncXmlHandler extends DefaultHandler {
                     //so we trim the last digit in each block, doesn't affect the color much
                     if (!color.equals("Not Set")) {
                         // avoid known exception, printStackTrace is very time consuming
-                        if (!Pattern.matches(Account.COLOR_HEX_REGEX, color))
+                        if (!Pattern.matches(ACCOUNT_COLOR_HEX_REGEX, color))
                             color = "#" + color.replaceAll(".(.)?", "$1").replace("null", "");
                         try {
                             if (mAccount != null)
-                                mAccount.setColorCode(color);
+                                mAccount.setColor(color);
                         } catch (IllegalArgumentException ex) {
                             //sometimes the color entry in the account file is "Not set" instead of just blank. So catch!
                             Log.e(LOG_TAG, "Invalid color code '" + color + "' for account " + mAccount.getName());
@@ -666,7 +688,7 @@ public class GncXmlHandler extends DefaultHandler {
                 break;
             case GncXmlHelper.TAG_TRANSACTION:
                 mTransaction.setTemplate(mInTemplates);
-                Split imbSplit = mTransaction.getAutoBalanceSplit();
+                Split imbSplit = mTransaction.createAutoBalanceSplit();
                 if (imbSplit != null) {
                     mAutoBalanceSplits.add(imbSplit);
                 }
@@ -707,7 +729,7 @@ public class GncXmlHandler extends DefaultHandler {
                 break;
             //todo: export auto_notify, advance_create, advance_notify
             case GncXmlHelper.TAG_SX_NUM_OCCUR:
-                mScheduledAction.setTotalFrequency(Integer.parseInt(characterString));
+                mScheduledAction.setTotalPlannedExecutionCount(Integer.parseInt(characterString));
                 break;
             case GncXmlHelper.TAG_RX_MULT:
                 mRecurrenceMultiplier = Integer.parseInt(characterString);
@@ -877,6 +899,7 @@ public class GncXmlHandler extends DefaultHandler {
 
         // Set the account for created balancing splits to correct imbalance accounts
         for (Split split: mAutoBalanceSplits) {
+            // XXX: yes, getAccountUID() returns a currency code in this case (see Transaction.createAutoBalanceSplit())
             String currencyCode = split.getAccountUID();
             Account imbAccount = mapImbalanceAccount.get(currencyCode);
             if (imbAccount == null) {
@@ -952,7 +975,8 @@ public class GncXmlHandler extends DefaultHandler {
         BooksDbAdapter booksDbAdapter = BooksDbAdapter.getInstance();
         mBook.setRootAccountUID(mRootAccount.getUID());
         mBook.setDisplayName(booksDbAdapter.generateDefaultBookName());
-
+        //we on purpose do not set the book active. Only import. Caller should handle activation
+        
         long startTime = System.nanoTime();
         mAccountsDbAdapter.beginTransaction();
         Log.d(getClass().getSimpleName(), "bulk insert starts");
@@ -979,8 +1003,9 @@ public class GncXmlHandler extends DefaultHandler {
             long nPrices = mPricesDbAdapter.bulkAddRecords(mPriceList, DatabaseAdapter.UpdateMethod.insert);
             Log.d(getClass().getSimpleName(), String.format("%d prices inserted", nPrices));
 
-            long nBudgets = mBudgetsDbAdapter.bulkAddRecords(mBudgetList, DatabaseAdapter.UpdateMethod.insert);
-            Log.d(getClass().getSimpleName(), String.format("%d budgets inserted", nBudgets));
+            //// TODO: 01.06.2016 Re-enable import of Budget stuff when the UI is complete
+//            long nBudgets = mBudgetsDbAdapter.bulkAddRecords(mBudgetList, DatabaseAdapter.UpdateMethod.insert);
+//            Log.d(getClass().getSimpleName(), String.format("%d budgets inserted", nBudgets));
 
             long endTime = System.nanoTime();
             Log.d(getClass().getSimpleName(), String.format("bulk insert time: %d", endTime - startTime));
@@ -1053,7 +1078,7 @@ public class GncXmlHandler extends DefaultHandler {
         if (scheduledAction.getActionType() != ScheduledAction.ActionType.TRANSACTION
                 || !scheduledAction.isEnabled() || !scheduledAction.shouldAutoCreate()
                 || (scheduledAction.getEndTime() > 0 && scheduledAction.getEndTime() > System.currentTimeMillis())
-                || (scheduledAction.getTotalFrequency() > 0 && scheduledAction.getExecutionCount() >= scheduledAction.getTotalFrequency())){
+                || (scheduledAction.getTotalPlannedExecutionCount() > 0 && scheduledAction.getExecutionCount() >= scheduledAction.getTotalPlannedExecutionCount())){
             return 0;
         }
 
@@ -1072,6 +1097,10 @@ public class GncXmlHandler extends DefaultHandler {
                     transaction.setTime(lastRuntime);
                     transaction.setScheduledActionUID(scheduledAction.getUID());
                     mTransactionList.add(transaction);
+                    //autobalance splits are generated with the currency of the transactions as the GUID
+                    //so we add them to the mAutoBalanceSplits which will be updated to real GUIDs before saving
+                    List<Split> autoBalanceSplits = transaction.getSplits(transaction.getCurrencyCode());
+                    mAutoBalanceSplits.addAll(autoBalanceSplits);
                     scheduledAction.setExecutionCount(scheduledAction.getExecutionCount() + 1);
                     ++generatedTransactionCount;
                     break;

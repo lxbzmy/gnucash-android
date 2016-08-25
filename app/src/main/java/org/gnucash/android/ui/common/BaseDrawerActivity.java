@@ -22,6 +22,7 @@ import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.graphics.PorterDuff;
+import android.os.Build;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
 import android.support.annotation.LayoutRes;
@@ -45,7 +46,6 @@ import org.gnucash.android.app.GnuCashApplication;
 import org.gnucash.android.db.DatabaseSchema;
 import org.gnucash.android.db.adapter.BooksDbAdapter;
 import org.gnucash.android.ui.account.AccountsActivity;
-import org.gnucash.android.ui.budget.BudgetsActivity;
 import org.gnucash.android.ui.passcode.PasscodeLockActivity;
 import org.gnucash.android.ui.report.ReportsActivity;
 import org.gnucash.android.ui.settings.PreferenceActivity;
@@ -85,6 +85,7 @@ public abstract class BaseDrawerActivity extends PasscodeLockActivity implements
 
     protected ActionBarDrawerToggle mDrawerToggle;
 
+    public static final int REQUEST_OPEN_DOCUMENT = 0x20;
 
     private class DrawerItemClickListener implements NavigationView.OnNavigationItemSelectedListener {
 
@@ -224,10 +225,18 @@ public abstract class BaseDrawerActivity extends PasscodeLockActivity implements
      * Handler for the navigation drawer items
      * */
     protected void onDrawerMenuItemClicked(int itemId) {
-        mNavigationView.getMenu().findItem(itemId).setChecked(true);
         switch (itemId){
             case R.id.nav_item_open: { //Open... files
-                AccountsActivity.startXmlFileChooser(this);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT){
+                    //use the storage access framework
+                    Intent openDocument = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    openDocument.addCategory(Intent.CATEGORY_OPENABLE);
+                    openDocument.setType("*/*");
+                    startActivityForResult(openDocument, REQUEST_OPEN_DOCUMENT);
+
+                } else {
+                    AccountsActivity.startXmlFileChooser(this);
+                }
             }
             break;
 
@@ -247,10 +256,12 @@ public abstract class BaseDrawerActivity extends PasscodeLockActivity implements
             }
                 break;
 
+/*
+            //todo: Re-enable this when Budget UI is complete
             case R.id.nav_item_budgets:
                 startActivity(new Intent(this, BudgetsActivity.class));
                 break;
-
+*/
             case R.id.nav_item_scheduled_actions: { //show scheduled transactions
                 Intent intent = new Intent(this, ScheduledActionsActivity.class);
                 intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -286,6 +297,12 @@ public abstract class BaseDrawerActivity extends PasscodeLockActivity implements
             case AccountsActivity.REQUEST_PICK_ACCOUNTS_FILE:
                 AccountsActivity.importXmlFileFromIntent(this, data, null);
                 break;
+            case BaseDrawerActivity.REQUEST_OPEN_DOCUMENT: //this uses the Storage Access Framework
+                final int takeFlags = data.getFlags()
+                        & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                AccountsActivity.importXmlFileFromIntent(this, data, null);
+                getContentResolver().takePersistableUriPermission(data.getData(), takeFlags);
+                break;
             default:
                 super.onActivityResult(requestCode, resultCode, data);
                 break;
@@ -296,13 +313,16 @@ public abstract class BaseDrawerActivity extends PasscodeLockActivity implements
     public boolean onMenuItemClick(MenuItem item) {
         long id = item.getItemId();
         if (id == ID_MANAGE_BOOKS){
-            //// TODO: 11.12.2015 launch activity to manage books
+            Intent intent = new Intent(this, PreferenceActivity.class);
+            intent.setAction(PreferenceActivity.ACTION_MANAGE_BOOKS);
+            startActivity(intent);
+            mDrawerLayout.closeDrawer(mNavigationView);
             return true;
         }
         BooksDbAdapter booksDbAdapter = BooksDbAdapter.getInstance();
         String bookUID = booksDbAdapter.getUID(id);
         if (!bookUID.equals(booksDbAdapter.getActiveBookUID())){
-            ((GnuCashApplication) getApplication()).loadBook(bookUID);
+            GnuCashApplication.loadBook(bookUID);
             finish();
         }
         AccountsActivity.start(GnuCashApplication.getAppContext());
@@ -310,6 +330,7 @@ public abstract class BaseDrawerActivity extends PasscodeLockActivity implements
     }
 
     public void onClickAppTitle(View view){
+        mDrawerLayout.closeDrawer(mNavigationView);
         AccountsActivity.start(this);
     }
 
@@ -326,7 +347,7 @@ public abstract class BaseDrawerActivity extends PasscodeLockActivity implements
             String name = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseSchema.BookEntry.COLUMN_DISPLAY_NAME));
             menu.add(0, (int)id, maxRecent, name);
         }
-        menu.add(0, ID_MANAGE_BOOKS, maxRecent, "Manage Books...");
+        menu.add(0, ID_MANAGE_BOOKS, maxRecent, R.string.menu_manage_books);
 
         popup.show();
     }

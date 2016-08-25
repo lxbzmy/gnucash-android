@@ -27,14 +27,11 @@ import android.support.v4.app.FragmentManager;
 import android.support.v4.app.FragmentTransaction;
 import android.support.v4.widget.SlidingPaneLayout;
 import android.support.v7.app.ActionBar;
-import android.support.v7.app.AppCompatActivity;
 import android.support.v7.preference.Preference;
 import android.support.v7.preference.PreferenceFragmentCompat;
 import android.support.v7.preference.PreferenceManager;
 import android.view.MenuItem;
 import android.view.View;
-import android.widget.FrameLayout;
-import android.widget.Toast;
 
 import org.gnucash.android.R;
 import org.gnucash.android.db.adapter.BooksDbAdapter;
@@ -48,6 +45,8 @@ import butterknife.ButterKnife;
  */
 public class PreferenceActivity extends PasscodeLockActivity implements
         PreferenceFragmentCompat.OnPreferenceStartFragmentCallback{
+
+    public static final String ACTION_MANAGE_BOOKS = "org.gnucash.android.intent.action.MANAGE_BOOKS";
 
     @Bind(R.id.slidingpane_layout) SlidingPaneLayout mSlidingPaneLayout;
 
@@ -77,8 +76,14 @@ public class PreferenceActivity extends PasscodeLockActivity implements
             }
         });
 
-        mSlidingPaneLayout.openPane();
-        loadFragment(new GeneralPreferenceFragment());
+        String action = getIntent().getAction();
+        if (action != null && action.equals(ACTION_MANAGE_BOOKS)){
+            loadFragment(new BookManagerFragment());
+            mSlidingPaneLayout.closePane();
+        } else {
+            mSlidingPaneLayout.openPane();
+            loadFragment(new GeneralPreferenceFragment());
+        }
 
         ActionBar actionBar = getSupportActionBar();
         assert actionBar != null;

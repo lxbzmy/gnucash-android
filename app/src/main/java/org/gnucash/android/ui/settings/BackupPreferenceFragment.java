@@ -319,7 +319,7 @@ public class BackupPreferenceFragment extends PreferenceFragmentCompat implement
 							});
 
 						}
-						Toast.makeText(context, "Connected to Google Drive", Toast.LENGTH_SHORT).show();
+						Toast.makeText(context, R.string.toast_connected_to_google_drive, Toast.LENGTH_SHORT).show();
 					}
 
 					@Override
@@ -337,7 +337,7 @@ public class BackupPreferenceFragment extends PreferenceFragmentCompat implement
 								connectionResult.startResolutionForResult((Activity) context, REQUEST_RESOLVE_CONNECTION);
 							} catch (IntentSender.SendIntentException e) {
 								Log.e(BackupPreferenceFragment.class.getName(), e.getMessage());
-								Toast.makeText(context, "Unable to link to Google Drive", Toast.LENGTH_LONG).show();
+								Toast.makeText(context, R.string.toast_unable_to_connect_to_google_drive, Toast.LENGTH_LONG).show();
 							}
 						} else {
 							if (context instanceof Activity)
@@ -353,10 +353,19 @@ public class BackupPreferenceFragment extends PreferenceFragmentCompat implement
 	 */
 	private void restoreBackup() {
 		Log.i("Settings", "Opening GnuCash XML backups for restore");
-		File[] backupFiles = new File(Exporter.BACKUP_FOLDER_PATH).listFiles();
-		if (backupFiles == null){
-			Toast.makeText(getActivity(), R.string.toast_backup_folder_not_found, Toast.LENGTH_LONG).show();
-			new File(Exporter.BACKUP_FOLDER_PATH).mkdirs();
+		String bookUID = BooksDbAdapter.getInstance().getActiveBookUID();
+		File[] backupFiles = new File(Exporter.getBackupFolderPath(bookUID)).listFiles();
+		if (backupFiles == null || backupFiles.length == 0){
+			android.support.v7.app.AlertDialog.Builder builder = new android.support.v7.app.AlertDialog.Builder(getActivity())
+					.setTitle("No backups found")
+					.setMessage("There are no existing backup files to restore from")
+					.setNegativeButton(R.string.label_dismiss, new DialogInterface.OnClickListener() {
+						@Override
+						public void onClick(DialogInterface dialog, int which) {
+							dialog.dismiss();
+						}
+					});
+			builder.create().show();
 			return;
 		}
 

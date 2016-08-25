@@ -21,9 +21,11 @@ import android.app.PendingIntent;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.os.Environment;
+import android.support.v7.preference.PreferenceManager;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -44,6 +46,7 @@ import org.gnucash.android.model.PeriodType;
 import org.gnucash.android.model.Recurrence;
 import org.gnucash.android.model.ScheduledAction;
 import org.gnucash.android.model.Transaction;
+import org.gnucash.android.service.ScheduledActionService;
 import org.gnucash.android.util.PreferencesHelper;
 import org.gnucash.android.util.TimestampHelper;
 import org.xml.sax.InputSource;
@@ -192,7 +195,7 @@ public class MigrationHelper {
                 for (File src : oldExportFolder.listFiles()) {
                     if (src.isDirectory())
                         continue;
-                    File dst = new File(Exporter.EXPORT_FOLDER_PATH + "/" + src.getName());
+                    File dst = new File(Exporter.BASE_FOLDER_PATH + "/exports/" + src.getName());
                     try {
                         MigrationHelper.moveFile(src, dst);
                     } catch (IOException e) {
@@ -208,7 +211,7 @@ public class MigrationHelper {
             File oldBackupFolder = new File(oldExportFolder, "backup");
             if (oldBackupFolder.exists()){
                 for (File src : new File(oldExportFolder, "backup").listFiles()) {
-                    File dst = new File(Exporter.BACKUP_FOLDER_PATH + "/" + src.getName());
+                    File dst = new File(Exporter.BASE_FOLDER_PATH + "/backups/" + src.getName());
                     try {
                         MigrationHelper.moveFile(src, dst);
                     } catch (IOException e) {
@@ -222,7 +225,6 @@ public class MigrationHelper {
                 oldExportFolder.delete();
         }
     };
-
 
     /**
      * Imports commodities into the database from XML resource file
@@ -489,8 +491,8 @@ public class MigrationHelper {
     static int upgradeDbToVersion8(SQLiteDatabase db) {
         Log.i(DatabaseHelper.LOG_TAG, "Upgrading database to version 8");
         int oldVersion = 7;
-        new File(Exporter.BACKUP_FOLDER_PATH).mkdirs();
-        new File(Exporter.EXPORT_FOLDER_PATH).mkdirs();
+        new File(Exporter.BASE_FOLDER_PATH + "/backups/").mkdirs();
+        new File(Exporter.BASE_FOLDER_PATH + "/exports/").mkdirs();
         //start moving the files in background thread before we do the database stuff
         new Thread(moveExportedFilesToNewDefaultLocation).start();
 
@@ -1226,6 +1228,7 @@ public class MigrationHelper {
      *     <li>Migrate scheduled transaction recurrences to own table</li>
      *     <li>Adds flags for reconciled status to split table</li>
      *     <li>Add flags for auto-/advance- create and notification to scheduled actions</li>
+     *     <li>Migrate old shared preferences into new book-specific preferences</li>
      * </ul>
      * </p>
      * @param db SQlite database to be upgraded
@@ -1434,6 +1437,41 @@ public class MigrationHelper {
         } finally {
             db.endTransaction();
         }
+
+        //Migrate book-specific preferences away from shared preferences
+        Log.d(LOG_TAG, "Migrating shared preferences into book preferences");
+        Context context = GnuCashApplication.getAppContext();
+        String keyUseDoubleEntry = context.getString(R.string.key_use_double_entry);
+        String keySaveOpeningBalance = context.getString(R.string.key_save_opening_balances);
+        String keyLastExportTime = PreferencesHelper.PREFERENCE_LAST_EXPORT_TIME_KEY;
+        String keyUseCompactView = context.getString(R.string.key_use_compact_list);
+
+        SharedPreferences sharedPrefs = PreferenceManager.getDefaultSharedPreferences(context);
+        String lastExportTime = sharedPrefs.getString(keyLastExportTime, TimestampHelper.getTimestampFromEpochZero().toString());
+        boolean useDoubleEntry = sharedPrefs.getBoolean(keyUseDoubleEntry, true);
+        boolean saveOpeningBalance = sharedPrefs.getBoolean(keySaveOpeningBalance, false);
+        boolean useCompactTrnView = PreferenceManager.getDefaultSharedPreferences(context)
+                .getBoolean(context.getString(R.string.key_use_double_entry), !useDoubleEntry);
+
+        String rootAccountUID = getGnuCashRootAccountUID(db);
+        SharedPreferences bookPrefs = context.getSharedPreferences(rootAccountUID, Context.MODE_PRIVATE);
+
+        bookPrefs.edit()
+                .putString(keyLastExportTime, lastExportTime)
+                .putBoolean(keyUseDoubleEntry, useDoubleEntry)
+                .putBoolean(keySaveOpeningBalance, saveOpeningBalance)
+                .putBoolean(keyUseCompactView, useCompactTrnView)
+                .apply();
+
+        //cancel the existing pending intent so that the alarm can be rescheduled
+        Intent alarmIntent = new Intent(context, ScheduledActionService.class);
+        PendingIntent pendingIntent = PendingIntent.getService(context, 0, alarmIntent, PendingIntent.FLAG_NO_CREATE);
+        AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        alarmManager.cancel(pendingIntent);
+        pendingIntent.cancel();
+
+        GnuCashApplication.startScheduledActionExecutionService(GnuCashApplication.getAppContext());
+
         return oldVersion;
     }
 }

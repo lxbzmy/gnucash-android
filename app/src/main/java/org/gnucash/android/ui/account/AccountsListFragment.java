@@ -51,7 +51,6 @@ import android.widget.TextView;
 
 import org.gnucash.android.R;
 import org.gnucash.android.app.GnuCashApplication;
-
 import org.gnucash.android.db.DatabaseCursorLoader;
 import org.gnucash.android.db.DatabaseSchema;
 import org.gnucash.android.db.adapter.AccountsDbAdapter;
@@ -60,10 +59,10 @@ import org.gnucash.android.model.Account;
 import org.gnucash.android.model.Budget;
 import org.gnucash.android.model.Money;
 import org.gnucash.android.ui.common.FormActivity;
+import org.gnucash.android.ui.common.Refreshable;
 import org.gnucash.android.ui.common.UxArgument;
 import org.gnucash.android.ui.util.AccountBalanceTask;
 import org.gnucash.android.ui.util.CursorRecyclerAdapter;
-import org.gnucash.android.ui.common.Refreshable;
 import org.gnucash.android.ui.util.widget.EmptyRecyclerView;
 
 import java.util.List;
@@ -104,6 +103,11 @@ public class AccountsListFragment extends Fragment implements
      * Logging tag
      */
     protected static final String TAG = "AccountsListFragment";
+
+    /**
+     * Tag to save {@link AccountsListFragment#mDisplayMode} to fragment state
+     */
+    private static final String STATE_DISPLAY_MODE = "mDisplayMode";
 
     /**
      * Database adapter for loading Account records from the database
@@ -176,6 +180,9 @@ public class AccountsListFragment extends Fragment implements
         Bundle args = getArguments();
         if (args != null)
             mParentAccountUID = args.getString(UxArgument.PARENT_ACCOUNT_UID);
+
+        if (savedInstanceState != null)
+            mDisplayMode = (DisplayMode) savedInstanceState.getSerializable(STATE_DISPLAY_MODE);
     }
 
     @Override
@@ -281,6 +288,10 @@ public class AccountsListFragment extends Fragment implements
 
 
     @Override
+    /**
+     * Refresh the account list as a sublist of another account
+     * @param parentAccountUID GUID of the parent account
+     */
     public void refresh(String parentAccountUID) {
         getArguments().putString(UxArgument.PARENT_ACCOUNT_UID, parentAccountUID);
         refresh();
@@ -293,6 +304,12 @@ public class AccountsListFragment extends Fragment implements
     @Override
     public void refresh() {
         getLoaderManager().restartLoader(0, null, this);
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putSerializable(STATE_DISPLAY_MODE, mDisplayMode);
     }
 
     /**

@@ -78,6 +78,11 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
     private final TransactionsDbAdapter mTransactionsAdapter;
 
     /**
+     * Commodities database adapter for commodity manipulation
+     */
+    private final CommoditiesDbAdapter mCommoditiesDbAdapter;
+
+    /**
      * Overloaded constructor. Creates an adapter for an already open database
      * @param db SQliteDatabase instance
      */
@@ -98,6 +103,35 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
                 AccountEntry.COLUMN_DEFAULT_TRANSFER_ACCOUNT_UID
         });
         mTransactionsAdapter = transactionsDbAdapter;
+        mCommoditiesDbAdapter = new CommoditiesDbAdapter(db);
+    }
+
+    /**
+     * Convenience overloaded constructor. 
+     * This is used when an AccountsDbAdapter object is needed quickly. Otherwise, the other 
+     * constructor {@link #AccountsDbAdapter(SQLiteDatabase, TransactionsDbAdapter)}
+     * should be used whenever possible
+     * @param db Database to create an adapter for
+     */
+    public AccountsDbAdapter(SQLiteDatabase db){
+        super(db, AccountEntry.TABLE_NAME, new String[]{
+                AccountEntry.COLUMN_NAME         ,
+                AccountEntry.COLUMN_DESCRIPTION  ,
+                AccountEntry.COLUMN_TYPE         ,
+                AccountEntry.COLUMN_CURRENCY     ,
+                AccountEntry.COLUMN_COLOR_CODE   ,
+                AccountEntry.COLUMN_FAVORITE     ,
+                AccountEntry.COLUMN_FULL_NAME    ,
+                AccountEntry.COLUMN_PLACEHOLDER  ,
+                AccountEntry.COLUMN_CREATED_AT   ,
+                AccountEntry.COLUMN_HIDDEN       ,
+                AccountEntry.COLUMN_COMMODITY_UID,
+                AccountEntry.COLUMN_PARENT_ACCOUNT_UID,
+                AccountEntry.COLUMN_DEFAULT_TRANSFER_ACCOUNT_UID
+        });
+
+        mTransactionsAdapter = new TransactionsDbAdapter(db, new SplitsDbAdapter(db));
+        mCommoditiesDbAdapter = new CommoditiesDbAdapter(db);
     }
 
     /**
@@ -150,6 +184,7 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
         //this is necessary because the database has ON DELETE CASCADE between accounts and splits
         //and all accounts are editing via SQL REPLACE
 
+        //// TODO: 20.04.2016 Investigate if we can safely remove updating the transactions when bulk updating accounts
         List<Transaction> transactionList = new ArrayList<>(accountList.size()*2);
         for (Account account : accountList) {
             transactionList.addAll(account.getTransactions());
@@ -170,20 +205,16 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
         if (account.getDescription() != null)
             stmt.bindString(2, account.getDescription());
         stmt.bindString(3, account.getAccountType().name());
-        stmt.bindString(4, account.getCurrency().getCurrencyCode());
-        if (account.getColorHexCode() != null) {
-            stmt.bindString(5, account.getColorHexCode());
+        stmt.bindString(4, account.getCommodity().getCurrencyCode());
+        if (account.getColor() != Account.DEFAULT_COLOR) {
+            stmt.bindString(5, convertToRGBHexString(account.getColor()));
         }
         stmt.bindLong(6, account.isFavorite() ? 1 : 0);
         stmt.bindString(7, account.getFullName());
         stmt.bindLong(8, account.isPlaceholderAccount() ? 1 : 0);
         stmt.bindString(9, TimestampHelper.getUtcStringFromTimestamp(account.getCreatedTimestamp()));
         stmt.bindLong(10, account.isHidden() ? 1 : 0);
-        Commodity commodity = account.getCommodity();
-        if (commodity == null)
-            commodity = new CommoditiesDbAdapter(mDb).getCommodity(account.getCurrency().getCurrencyCode());
-
-        stmt.bindString(11, commodity.getUID());
+        stmt.bindString(11, account.getCommodity().getUID());
 
         String parentAccountUID = account.getParentUID();
         if (parentAccountUID == null && account.getAccountType() != AccountType.ROOT) {
@@ -198,6 +229,10 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
         stmt.bindString(14, account.getUID());
 
         return stmt;
+    }
+
+    private String convertToRGBHexString(int color) {
+        return String.format("#%06X", (0xFFFFFF & color));
     }
 
     /**
@@ -272,7 +307,7 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
             for (Account account : descendantAccounts)
                 mapAccounts.put(account.getUID(), account);
             String parentAccountFullName;
-            if (newParentAccountUID == null || getAccountType(newParentAccountUID) == AccountType.ROOT) {
+            if (getAccountType(newParentAccountUID) == AccountType.ROOT) {
                 parentAccountFullName = "";
             } else {
                 parentAccountFullName = getAccountFullName(newParentAccountUID);
@@ -401,14 +436,17 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
         Account account = new Account(c.getString(c.getColumnIndexOrThrow(AccountEntry.COLUMN_NAME)));
         populateBaseModelAttributes(c, account);
 
-        account.setDescription(c.getString(c.getColumnIndexOrThrow(AccountEntry.COLUMN_DESCRIPTION)));
+        String description = c.getString(c.getColumnIndexOrThrow(AccountEntry.COLUMN_DESCRIPTION));
+        account.setDescription(description == null ? "" : description);
         account.setParentUID(c.getString(c.getColumnIndexOrThrow(AccountEntry.COLUMN_PARENT_ACCOUNT_UID)));
         account.setAccountType(AccountType.valueOf(c.getString(c.getColumnIndexOrThrow(AccountEntry.COLUMN_TYPE))));
         Currency currency = Currency.getInstance(c.getString(c.getColumnIndexOrThrow(AccountEntry.COLUMN_CURRENCY)));
-        account.setCommodity(CommoditiesDbAdapter.getInstance().getCommodity(currency.getCurrencyCode()));
+        account.setCommodity(mCommoditiesDbAdapter.getCommodity(currency.getCurrencyCode()));
         account.setPlaceHolderFlag(c.getInt(c.getColumnIndexOrThrow(AccountEntry.COLUMN_PLACEHOLDER)) == 1);
         account.setDefaultTransferAccountUID(c.getString(c.getColumnIndexOrThrow(AccountEntry.COLUMN_DEFAULT_TRANSFER_ACCOUNT_UID)));
-        account.setColorCode(c.getString(c.getColumnIndexOrThrow(AccountEntry.COLUMN_COLOR_CODE)));
+        String color = c.getString(c.getColumnIndexOrThrow(AccountEntry.COLUMN_COLOR_CODE));
+        if (color != null)
+            account.setColor(color);
         account.setFavorite(c.getInt(c.getColumnIndexOrThrow(AccountEntry.COLUMN_FAVORITE)) == 1);
         account.setFullName(c.getString(c.getColumnIndexOrThrow(AccountEntry.COLUMN_FULL_NAME)));
         account.setHidden(c.getInt(c.getColumnIndexOrThrow(AccountEntry.COLUMN_HIDDEN)) == 1);
@@ -548,14 +586,14 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
      */
     public String getOrCreateImbalanceAccountUID(Currency currency){
         String imbalanceAccountName = getImbalanceAccountName(currency);
-        Commodity commodity = CommoditiesDbAdapter.getInstance().getCommodity(currency.getCurrencyCode());
+        Commodity commodity = mCommoditiesDbAdapter.getCommodity(currency.getCurrencyCode());
         String uid = findAccountUidByFullName(imbalanceAccountName);
         if (uid == null){
             Account account = new Account(imbalanceAccountName, commodity);
             account.setAccountType(AccountType.BANK);
             account.setParentUID(getOrCreateGnuCashRootAccountUID());
             account.setHidden(!GnuCashApplication.isDoubleEntryEnabled());
-            account.setColorCode("#964B00");
+            account.setColor("#964B00");
             addRecord(account, UpdateMethod.insert);
             uid = account.getUID();
         }
@@ -589,7 +627,7 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
         String[] tokens = fullName.trim().split(ACCOUNT_NAME_SEPARATOR);
         String uid = getOrCreateGnuCashRootAccountUID();
         String parentName = "";
-        ArrayList<Account> accountsList = new ArrayList<Account>();
+        ArrayList<Account> accountsList = new ArrayList<>();
         for (String token : tokens) {
             parentName += token;
             String parentUID = findAccountUidByFullName(parentName);
@@ -751,12 +789,11 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
         String currencyCode = GnuCashApplication.getDefaultCurrencyCode();
 
         Log.d(LOG_TAG, "all account list : " + accountUidList.size());
-        SplitsDbAdapter splitsDbAdapter = SplitsDbAdapter.getInstance();
-        Money splitSum = (startTimestamp == -1 && endTimestamp == -1)
+        SplitsDbAdapter splitsDbAdapter = mTransactionsAdapter.getSplitDbAdapter();
+
+        return (startTimestamp == -1 && endTimestamp == -1)
                 ? splitsDbAdapter.computeSplitBalance(accountUidList, currencyCode, hasDebitNormalBalance)
                 : splitsDbAdapter.computeSplitBalance(accountUidList, currencyCode, hasDebitNormalBalance, startTimestamp, endTimestamp);
-
-        return splitSum;
     }
 
     /**
@@ -785,7 +822,7 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
         accountsList.add(0, accountUID);
 
         Log.d(LOG_TAG, "all account list : " + accountsList.size());
-        SplitsDbAdapter splitsDbAdapter = SplitsDbAdapter.getInstance();
+        SplitsDbAdapter splitsDbAdapter = mTransactionsAdapter.getSplitDbAdapter();
         return (startTimestamp == -1 && endTimestamp == -1)
                 ? splitsDbAdapter.computeSplitBalance(accountsList, currencyCode, hasDebitNormalBalance)
                 : splitsDbAdapter.computeSplitBalance(accountsList, currencyCode, hasDebitNormalBalance, startTimestamp, endTimestamp);
@@ -809,7 +846,7 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
 
         boolean hasDebitNormalBalance = getAccountType(accountUIDList.get(0)).hasDebitNormalBalance();
 
-        SplitsDbAdapter splitsDbAdapter = SplitsDbAdapter.getInstance();
+        SplitsDbAdapter splitsDbAdapter = mTransactionsAdapter.getSplitDbAdapter();
         Money splitSum = (startTimestamp == -1 && endTimestamp == -1)
                 ? splitsDbAdapter.computeSplitBalance(accountUIDList, currencyCode, hasDebitNormalBalance)
                 : splitsDbAdapter.computeSplitBalance(accountUIDList, currencyCode, hasDebitNormalBalance, startTimestamp, endTimestamp);
@@ -829,8 +866,8 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
     public List<String> getDescendantAccountUIDs(String accountUID, String where, String[] whereArgs) {
         // accountsList will hold accountUID with all descendant accounts.
         // accountsListLevel will hold descendant accounts of the same level
-        ArrayList<String> accountsList = new ArrayList<String>();
-        ArrayList<String> accountsListLevel = new ArrayList<String>();
+        ArrayList<String> accountsList = new ArrayList<>();
+        ArrayList<String> accountsListLevel = new ArrayList<>();
         accountsListLevel.add(accountUID);
         for (;;) {
             Cursor cursor = mDb.query(AccountEntry.TABLE_NAME,
@@ -1094,14 +1131,14 @@ public class AccountsDbAdapter extends DatabaseAdapter<Account> {
      */
     public List<Transaction> getAllOpeningBalanceTransactions(){
         Cursor cursor = fetchAccounts(null, null, null);
-        List<Transaction> openingTransactions = new ArrayList<Transaction>();
+        List<Transaction> openingTransactions = new ArrayList<>();
         try {
             SplitsDbAdapter splitsDbAdapter = mTransactionsAdapter.getSplitDbAdapter();
             while (cursor.moveToNext()) {
                 long id = cursor.getLong(cursor.getColumnIndexOrThrow(AccountEntry._ID));
                 String accountUID = getUID(id);
                 String currencyCode = getCurrencyCode(accountUID);
-                ArrayList<String> accountList = new ArrayList<String>();
+                ArrayList<String> accountList = new ArrayList<>();
                 accountList.add(accountUID);
                 Money balance = splitsDbAdapter.computeSplitBalance(accountList,
                         currencyCode, getAccountType(accountUID).hasDebitNormalBalance());

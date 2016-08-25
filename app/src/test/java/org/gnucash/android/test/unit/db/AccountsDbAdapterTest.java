@@ -1,6 +1,23 @@
+/*
+ * Copyright (c) 2015 Ngewi Fet <ngewif@gmail.com>
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.gnucash.android.test.unit.db;
 
+import android.content.Context;
 import android.database.sqlite.SQLiteDatabase;
+import android.support.v7.preference.PreferenceManager;
 
 import org.assertj.core.data.Index;
 import org.gnucash.android.BuildConfig;
@@ -25,7 +42,6 @@ import org.gnucash.android.model.BudgetAmount;
 import org.gnucash.android.model.Commodity;
 import org.gnucash.android.model.Money;
 import org.gnucash.android.model.PeriodType;
-import org.gnucash.android.model.Price;
 import org.gnucash.android.model.Recurrence;
 import org.gnucash.android.model.ScheduledAction;
 import org.gnucash.android.model.Split;
@@ -35,7 +51,6 @@ import org.gnucash.android.test.unit.testutil.GnucashTestRunner;
 import org.gnucash.android.test.unit.testutil.ShadowCrashlytics;
 import org.gnucash.android.test.unit.testutil.ShadowUserVoice;
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -485,7 +500,7 @@ public class AccountsDbAdapterTest{
      * Opening an XML file should set the default currency to that used by the most accounts in the file
      */
     @Test
-    public void importingXml_shouldSetDefaultCurrency(){
+    public void importingXml_shouldSetDefaultCurrencyFromXml(){
         GnuCashApplication.setDefaultCurrencyCode("JPY");
 
         assertThat(GnuCashApplication.getDefaultCurrencyCode()).isEqualTo("JPY");
@@ -495,15 +510,11 @@ public class AccountsDbAdapterTest{
         loadDefaultAccounts();
 
         assertThat(GnuCashApplication.getDefaultCurrencyCode()).isNotEqualTo("JPY");
+        //the book has USD occuring most often and this will be used as the default currency
+        assertThat(GnuCashApplication.getDefaultCurrencyCode()).isEqualTo("USD");
+        assertThat(Commodity.DEFAULT_COMMODITY).isEqualTo(Commodity.USD);
 
-        Currency currency = Currency.getInstance(GnuCashApplication.getDefaultLocale());
-        String expectedCode = currency.getCurrencyCode();
-        Commodity expectedDefaultCommodity = CommoditiesDbAdapter.getInstance().getCommodity(expectedCode);
-
-        assertThat(GnuCashApplication.getDefaultCurrencyCode()).isEqualTo(expectedCode);
-        assertThat(Commodity.DEFAULT_COMMODITY).isEqualTo(expectedDefaultCommodity);
-
-        System.out.println("Default currency is now: " + expectedCode);
+        System.out.println("Default currency is now: " + Commodity.DEFAULT_COMMODITY);
     }
 
     /**

@@ -24,6 +24,7 @@ import android.support.annotation.NonNull;
 import android.text.TextUtils;
 import android.util.Log;
 
+import org.gnucash.android.app.GnuCashApplication;
 import org.gnucash.android.db.DatabaseSchema;
 import org.gnucash.android.db.DatabaseSchema.AccountEntry;
 import org.gnucash.android.db.DatabaseSchema.CommonColumns;
@@ -237,7 +238,12 @@ public abstract class DatabaseAdapter<Model extends BaseModel> {
         }
     }
 
-    /// This function should be called in a db transaction
+    /**
+     * Persist the model object to the database as records using the {@code updateMethod}
+     * @param modelList List of records
+     * @param updateMethod Method to use when persisting them
+     * @return Number of rows affected in the database
+     */
     private long doAddModels(@NonNull final List<Model> modelList, UpdateMethod updateMethod) {
         long nRow = 0;
         switch (updateMethod) {
@@ -707,6 +713,19 @@ public abstract class DatabaseAdapter<Model extends BaseModel> {
     }
 
     /**
+     * Deletes a book - removes the book record from the database and deletes the database file from the disk
+     * @param bookUID GUID of the book
+     * @return <code>true</code> if deletion was successful, <code>false</code> otherwise
+     * @see #deleteRecord(String)
+     */
+    public boolean deleteBook(@NonNull String bookUID){
+        boolean result = GnuCashApplication.getAppContext().deleteDatabase(bookUID);
+        if (result) //delete the db entry only if the file deletion was successful
+            result &= deleteRecord(bookUID);
+        return result;
+    }
+
+    /**
      * Returns an attribute from a specific column in the database for a specific record.
      * <p>The attribute is returned as a string which can then be converted to another type if
      * the caller was expecting something other type </p>
@@ -716,7 +735,24 @@ public abstract class DatabaseAdapter<Model extends BaseModel> {
      * @throws IllegalArgumentException if either the {@code recordUID} or {@code columnName} do not exist in the database
      */
     public String getAttribute(@NonNull String recordUID, @NonNull String columnName){
-        Cursor cursor = mDb.query(mTableName,
+        return getAttribute(mTableName, recordUID, columnName);
+    }
+
+    /**
+     * Returns an attribute from a specific column in the database for a specific record and specific table.
+     * <p>The attribute is returned as a string which can then be converted to another type if
+     * the caller was expecting something other type </p>
+     * <p>This method is an override of {@link #getAttribute(String, String)} which allows to select a value from a
+     * different table than the one of current adapter instance
+     * </p>
+     * @param tableName Database table name. See {@link DatabaseSchema}
+     * @param recordUID GUID of the record
+     * @param columnName Name of the column to be retrieved
+     * @return String value of the column entry
+     * @throws IllegalArgumentException if either the {@code recordUID} or {@code columnName} do not exist in the database
+     */
+    protected String getAttribute(@NonNull String tableName, @NonNull String recordUID, @NonNull String columnName){
+        Cursor cursor = mDb.query(tableName,
                 new String[]{columnName},
                 AccountEntry.COLUMN_UID + " = ?",
                 new String[]{recordUID}, null, null, null);

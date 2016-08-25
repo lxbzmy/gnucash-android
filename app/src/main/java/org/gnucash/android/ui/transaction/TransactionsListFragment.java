@@ -43,9 +43,9 @@ import android.widget.TextView;
 
 import org.gnucash.android.R;
 import org.gnucash.android.app.GnuCashApplication;
-import org.gnucash.android.db.adapter.AccountsDbAdapter;
 import org.gnucash.android.db.DatabaseCursorLoader;
 import org.gnucash.android.db.DatabaseSchema;
+import org.gnucash.android.db.adapter.AccountsDbAdapter;
 import org.gnucash.android.db.adapter.DatabaseAdapter;
 import org.gnucash.android.db.adapter.SplitsDbAdapter;
 import org.gnucash.android.db.adapter.TransactionsDbAdapter;
@@ -53,12 +53,12 @@ import org.gnucash.android.model.Money;
 import org.gnucash.android.model.Split;
 import org.gnucash.android.model.Transaction;
 import org.gnucash.android.ui.common.FormActivity;
+import org.gnucash.android.ui.common.Refreshable;
 import org.gnucash.android.ui.common.UxArgument;
 import org.gnucash.android.ui.homescreen.WidgetConfigurationActivity;
 import org.gnucash.android.ui.settings.PreferenceActivity;
 import org.gnucash.android.ui.transaction.dialog.BulkMoveDialogFragment;
 import org.gnucash.android.ui.util.CursorRecyclerAdapter;
-import org.gnucash.android.ui.common.Refreshable;
 import org.gnucash.android.ui.util.widget.EmptyRecyclerView;
 
 import java.util.List;
@@ -195,7 +195,7 @@ public class TransactionsListFragment extends Fragment implements
 			case R.id.menu_compact_trn_view:
 				item.setChecked(!item.isChecked());
 				mUseCompactView = !mUseCompactView;
-				mTransactionRecyclerAdapter.notifyItemRangeChanged(0, mTransactionRecyclerAdapter.getItemCount());
+				refresh();
 				return true;
 			default:
                 return super.onOptionsItemSelected(item);
@@ -245,18 +245,25 @@ public class TransactionsListFragment extends Fragment implements
 
 	public class TransactionRecyclerAdapter extends CursorRecyclerAdapter<TransactionRecyclerAdapter.ViewHolder>{
 
+		public static final int ITEM_TYPE_COMPACT 	= 0x111;
+		public static final int ITEM_TYPE_FULL		= 0x100;
+
 		public TransactionRecyclerAdapter(Cursor cursor) {
 			super(cursor);
 		}
 
 		@Override
 		public ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-			int layoutRes = mUseCompactView ? R.layout.cardview_compact_transaction : R.layout.cardview_transaction;
+			int layoutRes = viewType == ITEM_TYPE_COMPACT ? R.layout.cardview_compact_transaction : R.layout.cardview_transaction;
 			View v = LayoutInflater.from(parent.getContext())
 					.inflate(layoutRes, parent, false);
 			return new ViewHolder(v);
 		}
 
+		@Override
+		public int getItemViewType(int position) {
+			return mUseCompactView ? ITEM_TYPE_COMPACT : ITEM_TYPE_FULL;
+		}
 
 		@Override
 		public void onBindViewHolderCursor(ViewHolder holder, Cursor cursor) {

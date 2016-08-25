@@ -22,6 +22,7 @@ import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.preference.Preference;
 import android.support.v7.preference.PreferenceFragmentCompat;
+import android.support.v7.preference.SwitchPreferenceCompat;
 
 import org.gnucash.android.R;
 import org.gnucash.android.db.DatabaseSchema;
@@ -71,7 +72,19 @@ public class TransactionsPreferenceFragment extends PreferenceFragmentCompat imp
         pref = findPreference(getString(R.string.key_use_double_entry));
         pref.setOnPreferenceChangeListener(this);
 
-        Preference preference = findPreference(getString(R.string.key_delete_all_transactions));
+		String keyCompactView = getString(R.string.key_use_compact_list);
+		SwitchPreferenceCompat switchPref = (SwitchPreferenceCompat) findPreference(keyCompactView);
+		switchPref.setChecked(sharedPreferences.getBoolean(keyCompactView, false));
+
+		String keySaveBalance = getString(R.string.key_save_opening_balances);
+		switchPref = (SwitchPreferenceCompat) findPreference(keySaveBalance);
+		switchPref.setChecked(sharedPreferences.getBoolean(keySaveBalance, false));
+
+		String keyDoubleEntry = getString(R.string.key_use_double_entry);
+		switchPref = (SwitchPreferenceCompat) findPreference(keyDoubleEntry);
+		switchPref.setChecked(sharedPreferences.getBoolean(keyDoubleEntry, true));
+
+		Preference preference = findPreference(getString(R.string.key_delete_all_transactions));
         preference.setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
             @Override
             public boolean onPreferenceClick(Preference preference) {
@@ -84,7 +97,8 @@ public class TransactionsPreferenceFragment extends PreferenceFragmentCompat imp
 	@Override
 	public boolean onPreferenceChange(Preference preference, Object newValue) {
 		if (preference.getKey().equals(getString(R.string.key_use_double_entry))){
-            setImbalanceAccountsHidden((Boolean)newValue);
+			boolean useDoubleEntry = (Boolean) newValue;
+			setImbalanceAccountsHidden(useDoubleEntry);
         } else {
             setLocalizedSummary(preference, newValue.toString());
         }

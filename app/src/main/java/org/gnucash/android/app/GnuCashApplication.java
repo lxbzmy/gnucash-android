@@ -25,12 +25,14 @@ import android.database.SQLException;
 import android.database.sqlite.SQLiteDatabase;
 import android.graphics.Color;
 import android.os.Build;
+import android.os.SystemClock;
 import android.support.annotation.NonNull;
 import android.support.v7.preference.PreferenceManager;
 import android.util.Log;
 
 import com.crashlytics.android.Crashlytics;
 import com.crashlytics.android.core.CrashlyticsCore;
+import com.facebook.stetho.Stetho;
 import com.uservoice.uservoicesdk.Config;
 import com.uservoice.uservoicesdk.UserVoice;
 
@@ -50,7 +52,7 @@ import org.gnucash.android.db.adapter.SplitsDbAdapter;
 import org.gnucash.android.db.adapter.TransactionsDbAdapter;
 import org.gnucash.android.model.Commodity;
 import org.gnucash.android.model.Money;
-import org.gnucash.android.service.SchedulerService;
+import org.gnucash.android.service.ScheduledActionService;
 import org.gnucash.android.ui.account.AccountsActivity;
 import org.gnucash.android.ui.settings.PreferenceActivity;
 
@@ -97,7 +99,7 @@ public class GnuCashApplication extends Application{
     private static RecurrenceDbAdapter mRecurrenceDbAdapter;
 
     private static BooksDbAdapter mBooksDbAdapter;
-    private DatabaseHelper mDbHelper;
+    private static DatabaseHelper mDbHelper;
 
     /**
      * Returns darker version of specified <code>color</code>.
@@ -119,44 +121,35 @@ public class GnuCashApplication extends Application{
                 new CrashlyticsCore.Builder().disabled(!isCrashlyticsEnabled()).build())
                 .build());
 
-        // Set this up once when your application launches
-        Config config = new Config("gnucash.uservoice.com");
-        config.setTopicId(107400);
-        config.setForumId(320493);
-        config.putUserTrait("app_version_name", BuildConfig.VERSION_NAME);
-        config.putUserTrait("app_version_code", BuildConfig.VERSION_CODE);
-        config.putUserTrait("android_version", Build.VERSION.RELEASE);
-        // config.identifyUser("USER_ID", "User Name", "email@example.com");
-        UserVoice.init(config, this);
-
+        setUpUserVoice();
 
         BookDbHelper bookDbHelper = new BookDbHelper(getApplicationContext());
         mBooksDbAdapter = new BooksDbAdapter(bookDbHelper.getWritableDatabase());
 
         initDatabaseAdapters();
-
-        //TODO: migrate preferences from defaultShared to book
-
         setDefaultCurrencyCode(getDefaultCurrencyCode());
+
+        if (BuildConfig.DEBUG && !isRoboUnitTest())
+            setUpRemoteDebuggingFromChrome();
     }
 
     /**
      * Initialize database adapter singletons for use in the application
      * This method should be called every time a new book is opened
      */
-    private void initDatabaseAdapters() {
+    private static void initDatabaseAdapters() {
         if (mDbHelper != null){ //close if open
             mDbHelper.getReadableDatabase().close();
         }
 
-        mDbHelper = new DatabaseHelper(getApplicationContext(),
+        mDbHelper = new DatabaseHelper(getAppContext(),
                 mBooksDbAdapter.getActiveBookUID());
         SQLiteDatabase mainDb;
         try {
             mainDb = mDbHelper.getWritableDatabase();
         } catch (SQLException e) {
             Crashlytics.logException(e);
-            Log.e(getClass().getName(), "Error getting database: " + e.getMessage());
+            Log.e("GnuCashApplication", "Error getting database: " + e.getMessage());
             mainDb = mDbHelper.getReadableDatabase();
         }
 
@@ -215,10 +208,18 @@ public class GnuCashApplication extends Application{
      * Loads the book with GUID {@code bookUID}
      * @param bookUID GUID of the book to be loaded
      */
-    public void loadBook(String bookUID){
+    public static void loadBook(@NonNull String bookUID){
         mBooksDbAdapter.setActive(bookUID);
         initDatabaseAdapters();
         AccountsActivity.start(getAppContext());
+    }
+
+    /**
+     * Returns the currently active database in the application
+     * @return Currently active {@link SQLiteDatabase}
+     */
+    public static SQLiteDatabase getActiveDb(){
+        return mDbHelper.getWritableDatabase();
     }
 
     /**
@@ -238,13 +239,21 @@ public class GnuCashApplication extends Application{
     }
 
     /**
+     * Returns {@code true} if the app is being run by robolectric
+     * @return {@code true} if in unit testing, {@code false} otherwise
+     */
+    public static boolean isRoboUnitTest(){
+        return "robolectric".equals(Build.FINGERPRINT);
+    }
+
+    /**
      * Returns <code>true</code> if double entry is enabled in the app settings, <code>false</code> otherwise.
      * If the value is not set, the default value can be specified in the parameters.
      * @return <code>true</code> if double entry is enabled, <code>false</code> otherwise
      */
     public static boolean isDoubleEntryEnabled(){
         SharedPreferences sharedPrefs = PreferenceActivity.getActiveBookSharedPreferences(context);
-        return sharedPrefs.getBoolean(context.getString(R.string.key_use_double_entry), false);
+        return sharedPrefs.getBoolean(context.getString(R.string.key_use_double_entry), true);
     }
 
     /**
@@ -332,19 +341,51 @@ public class GnuCashApplication extends Application{
      * @param context Application context
      */
     public static void startScheduledActionExecutionService(Context context){
-        Intent alarmIntent = new Intent(context, SchedulerService.class);
+        Intent alarmIntent = new Intent(context, ScheduledActionService.class);
         PendingIntent pendingIntent = PendingIntent.getService(context, 0, alarmIntent, PendingIntent.FLAG_NO_CREATE);
-        if (pendingIntent != null)
+
+        if (pendingIntent != null) //if service is already scheduled, just return
             return;
         else
             pendingIntent = PendingIntent.getService(context, 0, alarmIntent, 0);
 
         AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
-        alarmManager.setInexactRepeating(AlarmManager.RTC_WAKEUP,
-                System.currentTimeMillis() + AlarmManager.INTERVAL_DAY,
-                AlarmManager.INTERVAL_HALF_DAY,
-                pendingIntent);
+        alarmManager.setInexactRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SystemClock.elapsedRealtime() + AlarmManager.INTERVAL_FIFTEEN_MINUTES,
+                AlarmManager.INTERVAL_HALF_DAY, pendingIntent);
 
         context.startService(alarmIntent); //run the service the first time
+    }
+
+    /**
+     * Sets up UserVoice.
+     *
+     * <p>Allows users to contact with us and access help topics.</p>
+     */
+    private void setUpUserVoice() {
+        // Set this up once when your application launches
+        Config config = new Config("gnucash.uservoice.com");
+        config.setTopicId(107400);
+        config.setForumId(320493);
+        config.putUserTrait("app_version_name", BuildConfig.VERSION_NAME);
+        config.putUserTrait("app_version_code", BuildConfig.VERSION_CODE);
+        config.putUserTrait("android_version", Build.VERSION.RELEASE);
+        // config.identifyUser("USER_ID", "User Name", "email@example.com");
+        UserVoice.init(config, this);
+    }
+
+    /**
+     * Sets up Stetho to enable remote debugging from Chrome developer tools.
+     *
+     * <p>Among other things, allows access to the database and preferences.
+     * See http://facebook.github.io/stetho/#features</p>
+     */
+    private void setUpRemoteDebuggingFromChrome() {
+        Stetho.Initializer initializer =
+                Stetho.newInitializerBuilder(this)
+                        .enableWebKitInspector(
+                                Stetho.defaultInspectorModulesProvider(this))
+                        .build();
+        Stetho.initialize(initializer);
     }
 }
