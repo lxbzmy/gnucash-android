@@ -457,12 +457,12 @@
   <string name="toast_unable_to_connect_to_google_drive">无法连接到Google Drive</string>
   <string name="toast_enter_amount_to_split">请输入拆分金额</string>
   <string name="label_export_target_external_service">其他服务……</string>
-  <string name="toast_updated_transaction_recurring_schedule">Updated transaction recurring schedule</string>
-  <string name="label_export_transactions_since_date">Since</string>
-  <string name="switch_export_transactions_from_all_time">All time</string>
+  <string name="toast_updated_transaction_recurring_schedule">计划交易已经更新</string>
+  <string name="label_export_transactions_since_date">时间点：</string>
+  <string name="switch_export_transactions_from_all_time">全部</string>
   <string name="label_recommend_app">在Play Store上推荐</string>
-  <string name="repeat_until_date">until %1$s</string>
-  <string name="repeat_on_weekday">on %1$s</string>
-  <string name="repeat_x_times">for %1$s times</string>
+  <string name="repeat_until_date">直到%1$s</string>
+  <string name="repeat_on_weekday">在%1$s</string>
+  <string name="repeat_x_times">共%1$s次</string>
   <string name="menu_show_compact_view">紧凑视图</string>
 </resources>
