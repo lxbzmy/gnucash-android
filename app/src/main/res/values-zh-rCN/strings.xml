@@ -138,7 +138,7 @@
 - 重新设计的锁屏界面\n
 - 改进计划交易功能\n
 - 多个缺陷修复以及性能提升\n
-	</string>
+    </string>
   <string name="label_dismiss">知道了</string>
   <string name="toast_transanction_amount_required">输入金额才能保存交易</string>
   <string name="toast_error_edit_multi_currency_transaction">不支持修改多币种的交易</string>
